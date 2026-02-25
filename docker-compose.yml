@@ -10,3 +10,19 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  ag402-gateway:
+    build: .
+    command: >
+      ag402 serve
+        --target http://audit-server:8000
+        --price ${AG402_PRICE:-0.05}
+        --address ${AG402_ADDRESS:-fisJvtob3HfaTWoCynHLp9McFoFZ2gL3VEiA4p4QnNm}
+        --port 8001
+    ports:
+      - "8001:8001"
+    env_file: .env
+    depends_on:
+      audit-server:
+        condition: service_healthy
+    restart: unless-stopped

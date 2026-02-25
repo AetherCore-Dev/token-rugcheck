@@ -1,5 +1,6 @@
 """Tests for the concurrent aggregator."""
 
+import asyncio
 import re
 
 import httpx
@@ -117,3 +118,80 @@ async def test_priority_rugcheck_over_goplus(httpx_mock):
         result = await agg.aggregate(MINT)
 
     assert result.token_name == "RugCheckName"
+
+
+# ---------------------------------------------------------------------------
+# Upstream health tracking
+# ---------------------------------------------------------------------------
+
+
+async def test_upstream_health_tracked_on_success(httpx_mock):
+    """Aggregator should track last_success_time after a successful call."""
+    httpx_mock.add_response(url=re.compile(r".*rugcheck.*"), json=RUGCHECK_RESP)
+    httpx_mock.add_response(url=re.compile(r".*dexscreener.*"), json=DEXSCREENER_RESP)
+    httpx_mock.add_response(url=re.compile(r".*gopluslabs.*"), json=GOPLUS_RESP)
+
+    async with httpx.AsyncClient() as client:
+        agg = Aggregator(CONFIG, client=client)
+        assert agg.last_success_time is None
+        await agg.aggregate(MINT)
+        assert agg.last_success_time is not None
+
+
+async def test_upstream_health_tracked_on_failure(httpx_mock):
+    """Aggregator should track last_failure_time when all sources fail."""
+    httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*rugcheck.*"))
+    httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*dexscreener.*"))
+    httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*gopluslabs.*"))
+
+    async with httpx.AsyncClient() as client:
+        agg = Aggregator(CONFIG, client=client)
+        assert agg.last_failure_time is None
+        await agg.aggregate(MINT)
+        assert agg.last_failure_time is not None
+        assert agg.last_success_time is None
+
+
+# ---------------------------------------------------------------------------
+# Semaphore concurrency limiting
+# ---------------------------------------------------------------------------
+
+
+async def test_semaphore_limits_concurrency():
+    """Verify that the semaphore actually limits concurrent upstream calls."""
+    max_concurrent = 0
+    current_concurrent = 0
+    lock = asyncio.Lock()
+
+    async def _slow_fetch(mint_address: str):
+        nonlocal max_concurrent, current_concurrent
+        async with lock:
+            current_concurrent += 1
+            if current_concurrent > max_concurrent:
+                max_concurrent = current_concurrent
+
+        await asyncio.sleep(0.02)
+
+        async with lock:
+            current_concurrent -= 1
+
+        from rugcheck.models import FetcherResult
+        return FetcherResult(source="Mock", success=True, data={"token_name": "Test"})
+
+    async with httpx.AsyncClient() as client:
+        agg = Aggregator(CONFIG, client=client)
+        agg._semaphore = asyncio.Semaphore(2)  # limit to 2 concurrent
+
+        # Patch all fetchers to use slow mock
+        agg.rugcheck.fetch = _slow_fetch
+        agg.dexscreener.fetch = _slow_fetch
+        agg.goplus.fetch = _slow_fetch
+
+        # Run multiple aggregations concurrently (6 upstream calls total)
+        await asyncio.gather(
+            agg.aggregate(MINT),
+            agg.aggregate(MINT),
+        )
+
+    # With semaphore=2, we should never exceed 2 concurrent upstream calls
+    assert max_concurrent <= 2

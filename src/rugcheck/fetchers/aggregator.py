@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 
 import httpx
@@ -20,30 +21,79 @@ logger = logging.getLogger(__name__)
 class Aggregator:
     """Fetches from GoPlus, RugCheck, and DexScreener in parallel, merges results."""
 
+    # Limit concurrent outbound requests to protect upstream APIs.
+    MAX_UPSTREAM_CONCURRENCY: int = 20
+
     def __init__(self, config: Config, client: httpx.AsyncClient | None = None):
-        self._client = client or httpx.AsyncClient()
+        self._client = client or httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, connect=5.0),
+        )
         self._owns_client = client is None
-        self.goplus = GoPlusFetcher(self._client, timeout=config.goplus_timeout)
+        self.goplus = GoPlusFetcher(
+            self._client,
+            timeout=config.goplus_timeout,
+            app_key=config.goplus_app_key,
+            app_secret=config.goplus_app_secret,
+        )
         self.rugcheck = RugCheckFetcher(self._client, timeout=config.rugcheck_timeout)
         self.dexscreener = DexScreenerFetcher(self._client, timeout=config.dexscreener_timeout)
+        self._semaphore = asyncio.Semaphore(self.MAX_UPSTREAM_CONCURRENCY)
+        # Track upstream health for /health endpoint
+        self.last_success_time: float | None = None
+        self.last_failure_time: float | None = None
 
     async def close(self) -> None:
         if self._owns_client:
             await self._client.aclose()
 
-    async def aggregate(self, mint_address: str) -> AggregatedData:
-        """Fetch all sources concurrently and merge into AggregatedData."""
-        results: list[FetcherResult] = await asyncio.gather(
-            self.rugcheck.fetch(mint_address),
-            self.dexscreener.fetch(mint_address),
-            self.goplus.fetch(mint_address),
-        )
+    # Hard cap on the total time we spend fetching from all upstream APIs.
+    AGGREGATE_TIMEOUT: float = 15.0
 
+    async def aggregate(self, mint_address: str) -> AggregatedData:
+        """Fetch all sources concurrently and merge into AggregatedData.
+
+        An overall ``AGGREGATE_TIMEOUT`` guard ensures the call always returns
+        within a bounded time even if individual fetcher timeouts are not
+        honoured (e.g. DNS resolution hangs).
+
+        A semaphore limits concurrent outbound requests to protect upstream APIs
+        from being overwhelmed by a burst of inbound traffic.
+        """
+
+        async def _guarded_fetch(fetcher):
+            async with self._semaphore:
+                return await fetcher.fetch(mint_address)
+
+        try:
+            results: list[FetcherResult] = await asyncio.wait_for(
+                asyncio.gather(
+                    _guarded_fetch(self.rugcheck),
+                    _guarded_fetch(self.dexscreener),
+                    _guarded_fetch(self.goplus),
+                ),
+                timeout=self.AGGREGATE_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.error("[AGG] aggregate() timed out after %.1fs", self.AGGREGATE_TIMEOUT)
+            results = [
+                FetcherResult(source="RugCheck", success=False, error="aggregate_timeout"),
+                FetcherResult(source="DexScreener", success=False, error="aggregate_timeout"),
+                FetcherResult(source="GoPlus", success=False, error="aggregate_timeout"),
+            ]
+
+        now = time.monotonic()
+        any_success = False
         for r in results:
             if r.success:
                 logger.info("[AGG] %s: OK", r.source)
+                any_success = True
             else:
                 logger.warning("[AGG] %s: FAILED (%s)", r.source, r.error)
+
+        if any_success:
+            self.last_success_time = now
+        else:
+            self.last_failure_time = now
 
         return _merge(results)
 

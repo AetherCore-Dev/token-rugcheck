@@ -28,9 +28,13 @@ class Config:
     goplus_app_key: str = ""
     goplus_app_secret: str = ""
 
-    # AgentPay
-    agentpay_price: str = "0.05"
-    agentpay_address: str = "fisJvtob3HfaTWoCynHLp9McFoFZ2gL3VEiA4p4QnNm"
+    # ag402 Payment Gateway
+    ag402_price: str = "0.05"
+    ag402_address: str = "fisJvtob3HfaTWoCynHLp9McFoFZ2gL3VEiA4p4QnNm"
+    ag402_chain: str = "solana"
+    ag402_token: str = "USDC"
+    ag402_network: str = "devnet"
+    ag402_gateway_port: int = 8001
 
 
 def load_config() -> Config:
@@ -46,6 +50,10 @@ def load_config() -> Config:
         dexscreener_timeout=float(os.getenv("DEXSCREENER_TIMEOUT_SECONDS", "3")),
         goplus_app_key=os.getenv("GOPLUS_APP_KEY", ""),
         goplus_app_secret=os.getenv("GOPLUS_APP_SECRET", ""),
-        agentpay_price=os.getenv("AGENTPAY_PRICE", "0.05"),
-        agentpay_address=os.getenv("AGENTPAY_ADDRESS", "fisJvtob3HfaTWoCynHLp9McFoFZ2gL3VEiA4p4QnNm"),
+        ag402_price=os.getenv("AG402_PRICE", "0.05"),
+        ag402_address=os.getenv("AG402_ADDRESS", "fisJvtob3HfaTWoCynHLp9McFoFZ2gL3VEiA4p4QnNm"),
+        ag402_chain=os.getenv("AG402_CHAIN", "solana"),
+        ag402_token=os.getenv("AG402_TOKEN", "USDC"),
+        ag402_network=os.getenv("X402_NETWORK", "devnet"),
+        ag402_gateway_port=int(os.getenv("AG402_GATEWAY_PORT", "8001")),
     )

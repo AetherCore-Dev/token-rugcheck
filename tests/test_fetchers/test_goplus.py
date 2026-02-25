@@ -94,3 +94,46 @@ async def test_goplus_http_500(httpx_mock):
 
     assert result.success is False
     assert "500" in result.error
+
+
+# ---------------------------------------------------------------------------
+# GoPlus authentication header tests
+# ---------------------------------------------------------------------------
+
+
+async def test_goplus_sends_auth_headers(httpx_mock, goplus_ok_response):
+    """When app_key/app_secret are provided, they should be sent as headers."""
+    captured_headers = {}
+
+    def _capture(request):
+        captured_headers.update(dict(request.headers))
+        return httpx.Response(200, json=goplus_ok_response)
+
+    httpx_mock.add_callback(_capture)
+
+    async with httpx.AsyncClient() as client:
+        fetcher = GoPlusFetcher(client, timeout=5.0, app_key="test-key", app_secret="test-secret")
+        result = await fetcher.fetch(MINT)
+
+    assert result.success is True
+    assert captured_headers.get("app_key") == "test-key"
+    assert captured_headers.get("app_secret") == "test-secret"
+
+
+async def test_goplus_no_auth_headers_when_empty(httpx_mock, goplus_ok_response):
+    """When credentials are empty, no auth headers should be sent."""
+    captured_headers = {}
+
+    def _capture(request):
+        captured_headers.update(dict(request.headers))
+        return httpx.Response(200, json=goplus_ok_response)
+
+    httpx_mock.add_callback(_capture)
+
+    async with httpx.AsyncClient() as client:
+        fetcher = GoPlusFetcher(client, timeout=5.0)
+        result = await fetcher.fetch(MINT)
+
+    assert result.success is True
+    assert "app_key" not in captured_headers
+    assert "app_secret" not in captured_headers

@@ -36,7 +36,7 @@ def rugcheck_ok_response():
                 "lp": {
                     "lpCurrentSupply": 1000,
                     "lpTotalSupply": 2000,
-                    "lpLockedPct": 0.95,  # 0-1 decimal (0.95 = 95%)
+                    "lpLockedPct": 95.0,  # already a percentage (95.0 = 95%)
                     "quoteUSD": 45000.0,
                 }
             }
@@ -61,7 +61,7 @@ async def test_rugcheck_success(httpx_mock, rugcheck_ok_response):
     assert "Low Liquidity" in result.data["rugcheck_risks"]
     assert result.data["top10_holder_pct"] == 13.0  # 8.0 + 5.0 = 13% (pct is already percentage)
     assert result.data["liquidity_usd"] == 45000.0
-    assert result.data["lp_locked_pct"] == 95.0  # lpLockedPct * 100
+    assert result.data["lp_locked_pct"] == 95.0  # lpLockedPct is already a percentage
     assert result.data["holder_count"] == 8000
 
 

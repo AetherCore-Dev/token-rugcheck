@@ -11,10 +11,21 @@ GOPLUS_URL = "https://api.gopluslabs.io/api/v1/solana/token_security"
 class GoPlusFetcher(BaseFetcher):
     source_name = "GoPlus"
 
+    def __init__(self, client, timeout: float = 5.0, app_key: str = "", app_secret: str = ""):
+        super().__init__(client, timeout=timeout)
+        self._app_key = app_key
+        self._app_secret = app_secret
+
     async def _do_fetch(self, mint_address: str) -> FetcherResult:
+        headers = {}
+        if self._app_key and self._app_secret:
+            headers["app_key"] = self._app_key
+            headers["app_secret"] = self._app_secret
+
         resp = await self.client.get(
             GOPLUS_URL,
             params={"contract_addresses": mint_address},
+            headers=headers,
             timeout=self.timeout,
         )
         resp.raise_for_status()

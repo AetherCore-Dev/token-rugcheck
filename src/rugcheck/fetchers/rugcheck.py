@@ -65,14 +65,14 @@ def _parse_rugcheck(raw: dict) -> dict:
     data["liquidity_usd"] = _safe_float(raw.get("totalMarketLiquidity"))
 
     # LP locked percentage — from the highest-liquidity market
-    # lpLockedPct is a 0-1 decimal (0.95 = 95% locked). Multiply by 100 for percentage.
+    # lpLockedPct is ALREADY a percentage (99.59 = 99.59% locked). Do NOT multiply by 100.
     markets = raw.get("markets") or []
     if markets:
         best = max(markets, key=lambda m: float((m.get("lp") or {}).get("quoteUSD") or 0))
         lp_info = best.get("lp") or {}
         lp_locked_pct = _safe_float(lp_info.get("lpLockedPct"))
         if lp_locked_pct is not None:
-            data["lp_locked_pct"] = round(lp_locked_pct * 100, 2)
+            data["lp_locked_pct"] = round(lp_locked_pct, 2)
 
     # Top holders — pct is ALREADY a percentage (7.64 = 7.64%), do NOT multiply by 100
     top_holders = raw.get("topHolders") or []

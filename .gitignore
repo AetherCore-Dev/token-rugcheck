@@ -14,3 +14,4 @@ venv/
 *.sqlite
 .DS_Store
 .claude/
+test-ledger/
