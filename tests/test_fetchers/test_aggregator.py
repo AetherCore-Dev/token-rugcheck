@@ -23,7 +23,7 @@ RUGCHECK_RESP = {
     "totalHolders": 5000,
     "risks": [],
     "topHolders": [{"owner": "a1", "pct": 5.0}],  # pct is already percentage
-    "markets": [{"lp": {"lpCurrentSupply": 100, "lpTotalSupply": 200, "lpLockedPct": 0.99, "quoteUSD": 80000}}],
+    "markets": [{"lp": {"lpCurrentSupply": 100, "lpTotalSupply": 200, "lpLockedPct": 99.0, "quoteUSD": 80000}}],
 }
 
 DEXSCREENER_RESP = [

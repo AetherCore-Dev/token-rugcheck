@@ -523,7 +523,7 @@ ag402 info                   # Show protocol version
 
 ```bash
 pip install -e ".[dev]"
-python -m pytest tests/ -v              # 74 tests
+python -m pytest tests/ -v              # 76 tests
 ruff check src/ tests/                  # Lint
 python examples/demo_agent.py           # E2E demo (direct mode)
 python examples/demo_agent.py --with-gateway  # E2E demo (with payment)

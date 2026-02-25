@@ -53,7 +53,7 @@ class RateLimiter:
 
     async def check(self, path: str, client_ip: str) -> tuple[bool, int]:
         """Return (allowed, retry_after_seconds). retry_after is 0 when allowed."""
-        if client_ip in self.EXEMPT_IPS:
+        if client_ip in self.EXEMPT_IPS or client_ip == "unknown":
             return True, 0
 
         for prefix, (max_req, window) in self._limits.items():

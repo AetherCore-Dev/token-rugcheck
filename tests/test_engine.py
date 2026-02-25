@@ -258,6 +258,13 @@ def test_build_report_partial_data():
     assert report.metadata.data_completeness == "minimal"
 
 
+def test_build_report_partial_two_sources():
+    """Two sources succeeded, one failed → partial."""
+    data = _make_data(sources_succeeded=["RugCheck", "DexScreener"], sources_failed=["GoPlus"])
+    report = build_report("PARTIALMINT2", data)
+    assert report.metadata.data_completeness == "partial"
+
+
 def test_build_report_cache_hit():
     data = _make_data()
     report = build_report("CACHEMINT", data, cache_hit=True)

@@ -246,3 +246,29 @@ async def test_data_age_positive_on_cache_hit():
     meta = resp.json()["metadata"]
     assert meta["cache_hit"] is True
     assert meta["data_age_seconds"] >= 0
+
+
+# ---------------------------------------------------------------------------
+# Aggregate timeout tests
+# ---------------------------------------------------------------------------
+
+
+async def test_audit_aggregate_timeout():
+    """If aggregate() exceeds the 20s hard timeout, server returns 503."""
+    import asyncio as _asyncio
+
+    class SlowAggregator:
+        last_success_time = None
+        last_failure_time = None
+
+        async def aggregate(self, mint_address: str):
+            await _asyncio.sleep(30)  # exceed the 20s server timeout
+
+        async def close(self):
+            pass
+
+    app = create_app(CONFIG, aggregator=SlowAggregator())
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(f"/audit/{MINT}")
+    assert resp.status_code == 503
+    assert "timed out" in resp.json()["detail"].lower()

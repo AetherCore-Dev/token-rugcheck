@@ -253,7 +253,7 @@ def build_report(
     else:
         summary = "No significant risk signals detected. Always do your own research (DYOR)."
 
-    if len(data.sources_failed) == 0:
+    if len(data.sources_failed) == 0 and len(data.sources_succeeded) >= 2:
         completeness = "full"
     elif len(data.sources_succeeded) >= 2:
         completeness = "partial"

@@ -1,10 +1,11 @@
 """Runner: launch _diag_full.py in subprocess, capture streaming output."""
 import asyncio
 import os
+import sys
 
 async def run():
     proc = await asyncio.create_subprocess_exec(
-        "/opt/miniconda3/bin/python", "-u", "tests/_diag_full.py",
+        sys.executable, "-u", "tests/_diag_full.py",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         env={**os.environ, "PYTHONUNBUFFERED": "1", "X402_MODE": "test", "X402_NETWORK": "mock"},
