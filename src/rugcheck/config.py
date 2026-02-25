@@ -22,7 +22,7 @@ class Config:
     # Upstream timeouts
     goplus_timeout: float = 5.0
     rugcheck_timeout: float = 5.0
-    dexscreener_timeout: float = 3.0
+    dexscreener_timeout: float = 5.0
 
     # GoPlus auth (optional)
     goplus_app_key: str = ""
@@ -47,7 +47,7 @@ def load_config() -> Config:
         cache_max_size=int(os.getenv("CACHE_MAX_SIZE", "10000")),
         goplus_timeout=float(os.getenv("GOPLUS_TIMEOUT_SECONDS", "5")),
         rugcheck_timeout=float(os.getenv("RUGCHECK_API_TIMEOUT_SECONDS", "5")),
-        dexscreener_timeout=float(os.getenv("DEXSCREENER_TIMEOUT_SECONDS", "3")),
+        dexscreener_timeout=float(os.getenv("DEXSCREENER_TIMEOUT_SECONDS", "5")),
         goplus_app_key=os.getenv("GOPLUS_APP_KEY", ""),
         goplus_app_secret=os.getenv("GOPLUS_APP_SECRET", ""),
         ag402_price=os.getenv("AG402_PRICE", "0.05"),

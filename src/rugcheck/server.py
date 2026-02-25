@@ -35,6 +35,12 @@ UPSTREAM_HEALTHY_WINDOW = 120  # 2 minutes
 class RateLimiter:
     """Simple in-memory sliding-window rate limiter keyed by IP."""
 
+    # Loopback addresses are exempt from rate limiting.  The ag402 payment
+    # gateway runs on the same host and proxies requests through localhost;
+    # its 402→pay→retry handshake would otherwise consume multiple rate-limit
+    # slots per logical request.
+    EXEMPT_IPS: frozenset[str] = frozenset({"127.0.0.1", "::1"})
+
     def __init__(self):
         # path_prefix -> (max_requests, window_seconds)
         self._limits: dict[str, tuple[int, int]] = {}
@@ -47,6 +53,9 @@ class RateLimiter:
 
     async def check(self, path: str, client_ip: str) -> tuple[bool, int]:
         """Return (allowed, retry_after_seconds). retry_after is 0 when allowed."""
+        if client_ip in self.EXEMPT_IPS:
+            return True, 0
+
         for prefix, (max_req, window) in self._limits.items():
             if path.startswith(prefix):
                 async with self._lock:

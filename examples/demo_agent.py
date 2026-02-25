@@ -242,6 +242,11 @@ async def main() -> None:
     print("=" * 64)
     print()
 
+    # Flush stdout before force-exit to ensure all output is visible.
+    import sys as _sys
+    _sys.stdout.flush()
+    _sys.stderr.flush()
+
     # Force exit to avoid uvicorn background task hangs
     import os as _os
     _os._exit(0)

@@ -119,21 +119,21 @@ RULES: list[Rule] = [
         name="mintable",
         level="CRITICAL",
         score=40,
-        flag_message="合约拥有增发权限 (Mintable)，庄家可无限增发砸盘。",
+        flag_message="Contract has active mint authority (Mintable) — owner can inflate supply at will.",
         evaluate=lambda d: d.is_mintable,
     ),
     Rule(
         name="lp_unprotected",
         level="CRITICAL",
         score=35,
-        flag_message="流动性池既未销毁也未充分锁仓 (LP Unprotected)，庄家可撤资 (Rug Pull)。",
+        flag_message="Liquidity pool is neither burned nor sufficiently locked (LP Unprotected) — owner can rug pull.",
         evaluate=_lp_unprotected,
     ),
     Rule(
         name="freezable",
         level="CRITICAL",
         score=30,
-        flag_message="合约拥有冻结权限 (Freezable)，庄家可冻结任何持币地址。",
+        flag_message="Contract has freeze authority (Freezable) — owner can freeze any holder's tokens.",
         evaluate=lambda d: d.is_freezable,
     ),
     # === High ===
@@ -141,21 +141,21 @@ RULES: list[Rule] = [
         name="top10_concentrated",
         level="HIGH",
         score=25,
-        flag_message="前 10 大地址持仓超 80%，筹码过度集中。",
+        flag_message="Top 10 holders control over 80% of supply — highly concentrated ownership.",
         evaluate=_top10_concentrated,
     ),
     Rule(
         name="low_liquidity",
         level="HIGH",
         score=20,
-        flag_message="流动性极低 (< $10,000)，极易被控盘或砸盘归零。",
+        flag_message="Extremely low liquidity (< $10,000) — easily manipulated or rug-pulled.",
         evaluate=lambda d: d.liquidity_usd < 10_000 if d.liquidity_usd is not None else None,
     ),
     Rule(
         name="sell_pressure",
         level="HIGH",
         score=15,
-        flag_message="24h 卖单数量远超买单 (>3x)，疑似抛售砸盘。",
+        flag_message="24h sell count far exceeds buys (>3x) — possible active dump.",
         evaluate=_sell_pressure,
     ),
     # === Medium ===
@@ -163,14 +163,14 @@ RULES: list[Rule] = [
         name="very_new_pair",
         level="MEDIUM",
         score=10,
-        flag_message="交易对创建不到 24 小时，极早期代币风险高。",
+        flag_message="Trading pair created less than 24 hours ago — very early-stage, high risk.",
         evaluate=lambda d: _pair_age_hours(d) < 24 if _pair_age_hours(d) is not None else None,
     ),
     Rule(
         name="low_volume",
         level="MEDIUM",
         score=5,
-        flag_message="24h 交易量极低 (< $1,000)，流动性不足。",
+        flag_message="Extremely low 24h volume (< $1,000) — insufficient liquidity.",
         evaluate=lambda d: d.volume_24h_usd < 1_000 if d.volume_24h_usd is not None else None,
     ),
     # === Low (informational, not alarming) ===
@@ -178,14 +178,14 @@ RULES: list[Rule] = [
         name="metadata_mutable",
         level="LOW",
         score=3,
-        flag_message="代币元数据可被修改 (Metadata Mutable)，在 Solana 生态中较常见。",
+        flag_message="Token metadata is mutable — common for Solana tokens.",
         evaluate=lambda d: d.is_metadata_mutable,
     ),
     Rule(
         name="closable",
         level="LOW",
         score=3,
-        flag_message="合约拥有关闭权限 (Closable)，通常用于 Solana 租金回收。",
+        flag_message="Contract has close authority (Closable) — typically used for Solana rent reclamation.",
         evaluate=lambda d: d.is_closable,
     ),
 ]
@@ -243,15 +243,15 @@ def build_report(
     is_safe = risk_score < 40
 
     if risk_level == RiskLevel.CRITICAL:
-        summary = "该代币存在多项致命风险，极大概率为 Rug Pull 骗局，强烈建议回避。"
+        summary = "This token has multiple critical risk factors and is very likely a rug pull scam. Strongly avoid."
     elif risk_level == RiskLevel.HIGH:
-        summary = "该代币存在显著风险因素，请谨慎评估后再决定是否交易。"
+        summary = "This token has significant risk factors. Evaluate carefully before trading."
     elif risk_level == RiskLevel.MEDIUM:
-        summary = "该代币存在中等风险，建议仔细核查后再做决策。"
+        summary = "This token has moderate risk. Review the details before making a decision."
     elif risk_level == RiskLevel.LOW:
-        summary = "该代币风险较低，但仍需注意市场波动风险。"
+        summary = "This token has low risk, but always be aware of market volatility."
     else:
-        summary = "未检测到明显风险信号，但请始终做好自己的研究 (DYOR)。"
+        summary = "No significant risk signals detected. Always do your own research (DYOR)."
 
     if len(data.sources_failed) == 0:
         completeness = "full"
@@ -293,8 +293,8 @@ def build_report(
 def _invert_message(rule_name: str) -> str:
     """Generate a positive message for rules that passed."""
     messages = {
-        "mintable": "增发权限已放弃 (Mint Renounced)。",
-        "freezable": "无冻结权限 (Not Freezable)。",
-        "lp_unprotected": "流动性池已充分保护 (LP Burned 或 Locked)。",
+        "mintable": "Mint authority renounced (Mint Renounced).",
+        "freezable": "No freeze authority (Not Freezable).",
+        "lp_unprotected": "Liquidity pool is sufficiently protected (LP Burned or Locked).",
     }
     return messages.get(rule_name, f"{rule_name}: OK")

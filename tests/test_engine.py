@@ -24,20 +24,20 @@ def test_mintable_triggers_critical():
     data = _make_data(is_mintable=True)
     score, reds, greens = evaluate(data)
     assert score >= 40
-    assert any("增发权限" in f.message for f in reds)
+    assert any("mint authority" in f.message.lower() for f in reds)
 
 
 def test_mintable_false_gives_green_flag():
     data = _make_data(is_mintable=False)
     _score, _reds, greens = evaluate(data)
-    assert any("增发权限已放弃" in f.message for f in greens)
+    assert any("Mint Renounced" in f.message for f in greens)
 
 
 def test_freezable_triggers_critical():
     data = _make_data(is_freezable=True)
     score, reds, _greens = evaluate(data)
     assert score >= 30
-    assert any("冻结权限" in f.message for f in reds)
+    assert any("freeze authority" in f.message.lower() for f in reds)
 
 
 def test_lp_unprotected_neither_burned_nor_locked():
@@ -52,14 +52,14 @@ def test_lp_burned_sufficient():
     """LP burned >= 50% → safe, even if locked is low."""
     data = _make_data(lp_burned_pct=80.0, lp_locked_pct=0.0)
     _score, _reds, greens = evaluate(data)
-    assert any("流动性池已充分保护" in f.message for f in greens)
+    assert any("LP Burned or Locked" in f.message for f in greens)
 
 
 def test_lp_locked_sufficient():
     """LP locked >= 50% → safe, even if burned is low."""
     data = _make_data(lp_burned_pct=0.0, lp_locked_pct=75.0)
     _score, _reds, greens = evaluate(data)
-    assert any("流动性池已充分保护" in f.message for f in greens)
+    assert any("LP Burned or Locked" in f.message for f in greens)
 
 
 def test_lp_both_unknown_skips_rule():
@@ -73,14 +73,14 @@ def test_top10_concentrated():
     data = _make_data(top10_holder_pct=85.0)
     score, reds, _greens = evaluate(data)
     assert score >= 25
-    assert any("前 10 大地址" in f.message for f in reds)
+    assert any("Top 10 holders" in f.message for f in reds)
 
 
 def test_low_liquidity():
     data = _make_data(liquidity_usd=5000.0)
     score, reds, _greens = evaluate(data)
     assert score >= 20
-    assert any("流动性极低" in f.message for f in reds)
+    assert any("low liquidity" in f.message.lower() for f in reds)
 
 
 def test_sell_pressure():
@@ -88,14 +88,14 @@ def test_sell_pressure():
     data = _make_data(buy_count_24h=100, sell_count_24h=400)
     score, reds, _greens = evaluate(data)
     assert score >= 15
-    assert any("卖单" in f.message for f in reds)
+    assert any("sell" in f.message.lower() for f in reds)
 
 
 def test_no_sell_pressure():
     """Normal buy/sell ratio → no flag."""
     data = _make_data(buy_count_24h=1000, sell_count_24h=800)
     _score, reds, _greens = evaluate(data)
-    assert not any("卖单" in f.message for f in reds)
+    assert not any("sell" in f.message.lower() for f in reds)
 
 
 def test_closable_is_low_severity():
@@ -103,7 +103,7 @@ def test_closable_is_low_severity():
     data = _make_data(is_closable=True)
     score, reds, _greens = evaluate(data)
     assert score <= 5  # LOW: only 3 points
-    closable_flags = [f for f in reds if "关闭权限" in f.message]
+    closable_flags = [f for f in reds if "close authority" in f.message.lower()]
     assert len(closable_flags) == 1
     assert closable_flags[0].level == "LOW"
 
@@ -113,7 +113,7 @@ def test_metadata_mutable_is_low_severity():
     data = _make_data(is_metadata_mutable=True)
     score, reds, _greens = evaluate(data)
     assert score <= 5
-    meta_flags = [f for f in reds if "元数据" in f.message]
+    meta_flags = [f for f in reds if "metadata" in f.message.lower()]
     assert len(meta_flags) == 1
     assert meta_flags[0].level == "LOW"
 
@@ -123,7 +123,7 @@ def test_very_new_pair():
     data = _make_data(pair_created_at=recent)
     score, reds, _greens = evaluate(data)
     assert score >= 10
-    assert any("24 小时" in f.message for f in reds)
+    assert any("24 hours" in f.message.lower() for f in reds)
 
 
 def test_low_volume():
@@ -140,7 +140,7 @@ def test_lp_unprotected_exempt_by_high_liquidity():
     data = _make_data(lp_burned_pct=0.0, lp_locked_pct=0.0, liquidity_usd=2_000_000.0)
     score, reds, greens = evaluate(data)
     assert not any("LP Unprotected" in f.message for f in reds)
-    assert any("流动性池已充分保护" in f.message for f in greens)
+    assert any("LP Burned or Locked" in f.message for f in greens)
 
 
 def test_lp_unprotected_not_exempt_by_low_liquidity():
@@ -154,14 +154,14 @@ def test_top10_concentrated_exempt_by_high_liquidity():
     """Top 10 > 80% but liquidity >= $1M → exempt."""
     data = _make_data(top10_holder_pct=85.0, liquidity_usd=5_000_000.0)
     score, reds, _greens = evaluate(data)
-    assert not any("前 10 大地址" in f.message for f in reds)
+    assert not any("Top 10 holders" in f.message for f in reds)
 
 
 def test_top10_concentrated_not_exempt_by_low_liquidity():
     """Top 10 > 80% and liquidity < $1M → still flagged."""
     data = _make_data(top10_holder_pct=85.0, liquidity_usd=100_000.0)
     score, reds, _greens = evaluate(data)
-    assert any("前 10 大地址" in f.message for f in reds)
+    assert any("Top 10 holders" in f.message for f in reds)
 
 
 # --- Composite scenarios ---
@@ -230,7 +230,7 @@ def test_build_report_critical():
     assert report.action.risk_level == RiskLevel.CRITICAL
     assert report.action.risk_score >= 70
     assert len(report.analysis.red_flags) >= 3
-    assert "Rug Pull" in report.analysis.summary
+    assert "rug pull" in report.analysis.summary.lower()
     assert report.metadata.response_time_ms == 500
     assert report.metadata.data_completeness == "full"
 

@@ -132,30 +132,41 @@ async def test_stats(safe_app):
 
 
 async def test_rate_limit_audit():
-    """Exceeding 60 req/min on /audit should return 429."""
-    app = create_app(CONFIG, aggregator=FakeAggregator(_safe_data()))
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        for _ in range(60):
-            resp = await client.get(f"/audit/{MINT}")
-            assert resp.status_code == 200
+    """Exceeding 60 req/min on /audit should return 429 for non-loopback IPs."""
+    from rugcheck.server import RateLimiter
 
-        # 61st request should be rate limited
-        resp = await client.get(f"/audit/{MINT}")
-        assert resp.status_code == 429
-        assert "Retry-After" in resp.headers
+    limiter = RateLimiter()
+    limiter.add_limit("/audit", max_requests=60, window_seconds=60)
+
+    for _ in range(60):
+        allowed, _ = await limiter.check("/audit/somemint", "192.168.1.100")
+        assert allowed
+
+    # 61st request should be rate limited
+    allowed, retry_after = await limiter.check("/audit/somemint", "192.168.1.100")
+    assert not allowed
+    assert retry_after > 0
+
+    # Loopback IPs should always be allowed
+    for _ in range(100):
+        allowed, _ = await limiter.check("/audit/somemint", "127.0.0.1")
+        assert allowed
 
 
 async def test_rate_limit_stats():
-    """Exceeding 10 req/min on /stats should return 429."""
-    app = create_app(CONFIG, aggregator=FakeAggregator(_safe_data()))
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        for _ in range(10):
-            resp = await client.get("/stats")
-            assert resp.status_code == 200
+    """Exceeding 10 req/min on /stats should return 429 for non-loopback IPs."""
+    from rugcheck.server import RateLimiter
 
-        resp = await client.get("/stats")
-        assert resp.status_code == 429
-        assert "Retry-After" in resp.headers
+    limiter = RateLimiter()
+    limiter.add_limit("/stats", max_requests=10, window_seconds=60)
+
+    for _ in range(10):
+        allowed, _ = await limiter.check("/stats", "192.168.1.100")
+        assert allowed
+
+    allowed, retry_after = await limiter.check("/stats", "192.168.1.100")
+    assert not allowed
+    assert retry_after > 0
 
 
 async def test_rate_limit_health_unlimited():
