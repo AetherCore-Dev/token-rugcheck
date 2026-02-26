@@ -182,13 +182,27 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
         agg = state["aggregator"]
         status = "ok"
 
-        if agg is not None and agg.last_success_time is not None:
-            seconds_since_success = time.monotonic() - agg.last_success_time
-            if seconds_since_success > UPSTREAM_HEALTHY_WINDOW:
+        if agg is not None:
+            has_ever_been_called = (
+                agg.last_success_time is not None or agg.last_failure_time is not None
+            )
+            if not has_ever_been_called:
+                # Server is idle — no audit requests received yet.
+                # This is normal after startup, not degraded.
+                status = "ok"
+            elif agg.last_failure_time is not None and agg.last_success_time is None:
+                # We've had failures but never a single success
                 status = "degraded"
-        elif agg is not None and agg.last_failure_time is not None and agg.last_success_time is None:
-            # We've had failures but never a success
-            status = "degraded"
+            elif agg.last_success_time is not None:
+                seconds_since_success = time.monotonic() - agg.last_success_time
+                if seconds_since_success > UPSTREAM_HEALTHY_WINDOW:
+                    # Only degrade if there has also been a recent failure,
+                    # otherwise the server is simply idle (no incoming requests).
+                    if (
+                        agg.last_failure_time is not None
+                        and (time.monotonic() - agg.last_failure_time) < UPSTREAM_HEALTHY_WINDOW
+                    ):
+                        status = "degraded"
 
         result = {
             "status": status,

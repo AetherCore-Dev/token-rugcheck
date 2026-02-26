@@ -15,7 +15,10 @@ COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY src/ src/
 
-USER appuser
-EXPOSE 8000
+# Block uvloop — aiosqlite (PersistentReplayGuard) is incompatible with it.
+ENV UVLOOP_INSTALL=0
 
-CMD ["python", "-m", "rugcheck.main"]
+USER appuser
+EXPOSE 8001
+
+CMD ["python", "-m", "rugcheck.gateway"]

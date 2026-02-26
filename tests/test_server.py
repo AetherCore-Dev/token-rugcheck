@@ -196,11 +196,11 @@ async def test_health_degraded_no_success():
     assert resp.json()["status"] == "degraded"
 
 
-async def test_health_degraded_stale_success():
-    """Health should return degraded when last success is too old."""
+async def test_health_degraded_stale_success_with_recent_failure():
+    """Health should return degraded when last success is stale AND there are recent failures."""
     agg = FakeAggregator(_safe_data())
-    # Simulate success 200 seconds ago (beyond 120s window)
-    agg.last_success_time = time.monotonic() - 200
+    agg.last_success_time = time.monotonic() - 200  # stale (beyond 120s)
+    agg.last_failure_time = time.monotonic() - 10    # recent failure
 
     app = create_app(CONFIG, aggregator=agg)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -209,6 +209,32 @@ async def test_health_degraded_stale_success():
     body = resp.json()
     assert body["status"] == "degraded"
     assert "last_upstream_success_secs_ago" in body
+
+
+async def test_health_ok_when_idle_stale_success():
+    """Stale success without recent failure = idle, not degraded."""
+    agg = FakeAggregator(_safe_data())
+    agg.last_success_time = time.monotonic() - 200  # stale
+    agg.last_failure_time = None                     # no failures
+
+    app = create_app(CONFIG, aggregator=agg)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+async def test_health_ok_when_never_called():
+    """Server just started, no audit requests yet — should be ok."""
+    agg = FakeAggregator(_safe_data())
+    agg.last_success_time = None
+    agg.last_failure_time = None
+
+    app = create_app(CONFIG, aggregator=agg)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
 
 
 async def test_health_ok_with_recent_success():

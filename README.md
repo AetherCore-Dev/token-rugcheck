@@ -55,18 +55,14 @@ pip install -e .
 
 # 2. Configure
 cp .env.example .env
-# Default .env is already configured for test mode, no edits needed
+# Edit .env — set AG402_ADDRESS to your wallet address
 
 # 3. Start audit server
 python -m rugcheck.main &
 # Audit server running on http://localhost:8000
 
 # 4. Start payment gateway
-ag402 serve \
-  --target http://localhost:8000 \
-  --price 0.05 \
-  --address fisJvtob3HfaTWoCynHLp9McFoFZ2gL3VEiA4p4QnNm \
-  --port 8001
+AG402_ADDRESS=<your_wallet_address> python -m rugcheck.gateway &
 # Gateway running on http://localhost:8001
 ```
 
@@ -148,11 +144,7 @@ GOPLUS_APP_SECRET=
 python -m rugcheck.main &
 
 # 5. Start payment gateway
-ag402 serve \
-  --target http://localhost:8000 \
-  --price 0.05 \
-  --address <your_devnet_wallet_address> \
-  --port 8001
+python -m rugcheck.gateway &
 
 # 6. Verify
 curl http://localhost:8000/health
@@ -281,11 +273,7 @@ docker compose up -d
 
 # 4b. Or deploy manually
 python -m rugcheck.main &
-ag402 serve \
-  --target http://localhost:8000 \
-  --price 0.05 \
-  --address <your_mainnet_wallet_address> \
-  --port 8001
+python -m rugcheck.gateway &
 ```
 
 #### Consumer Setup
@@ -359,18 +347,21 @@ ag402 status                                   # → status dashboard
 
 ```bash
 cp .env.example .env
-# Edit .env — set X402_MODE, X402_NETWORK, AG402_ADDRESS, SOLANA_PRIVATE_KEY
+# Edit .env — set AG402_ADDRESS, X402_MODE, X402_NETWORK, SOLANA_PRIVATE_KEY
 docker compose up -d
 ```
 
 Two services start:
-- `audit-server` on port 8000 — the audit API (with rate limiting and health checks)
-- `ag402-gateway` on port 8001 — payment gateway (waits for audit-server to be healthy)
+- `audit-server` on port 8000 — the audit API (Dockerfile, with rate limiting and health checks)
+- `ag402-gateway` on port 8001 — payment gateway (Dockerfile.gateway, persistent replay guard DB, healthcheck)
+
+The gateway uses a custom Python entry point (`rugcheck.gateway`) instead of `ag402 serve` CLI to avoid host-binding and uvloop/aiosqlite compatibility issues.
 
 ```bash
 docker compose logs -f          # Watch logs
 docker compose ps               # Check status
-curl http://localhost:8000/health   # Verify
+curl http://localhost:8000/health   # Verify audit server
+curl http://localhost:8001/health   # Verify gateway
 ```
 
 ---
@@ -395,8 +386,8 @@ GET /health
 
 | `status` | Meaning | Action |
 |----------|---------|--------|
-| `ok` | All systems normal | — |
-| `degraded` | No successful upstream call in 2 minutes | Check network / upstream APIs |
+| `ok` | All systems normal (or idle — no requests yet) | — |
+| `degraded` | Upstream API failures detected recently | Check network / upstream APIs |
 
 ### Audit Response Schema
 
@@ -523,7 +514,7 @@ ag402 info                   # Show protocol version
 
 ```bash
 pip install -e ".[dev]"
-python -m pytest tests/ -v              # 76 tests
+python -m pytest tests/ -v              # 78 tests
 ruff check src/ tests/                  # Lint
 python examples/demo_agent.py           # E2E demo (direct mode)
 python examples/demo_agent.py --with-gateway  # E2E demo (with payment)
@@ -537,7 +528,8 @@ src/rugcheck/
 ├── models.py              # Pydantic models (report schema)
 ├── cache.py               # Async-safe TTL cache (LRU, asyncio.Lock)
 ├── server.py              # FastAPI app + rate limiter + health checks
-├── main.py                # Entry point
+├── main.py                # Audit server entry point
+├── gateway.py             # ag402 gateway entry point (replaces `ag402 serve`)
 ├── fetchers/
 │   ├── base.py            # BaseFetcher ABC (sanitized errors)
 │   ├── goplus.py          # GoPlus Security API (supports auth)
