@@ -64,9 +64,17 @@ def main() -> None:
             )
             sys.exit(1)
 
-        from ag402_core.config import load_config as load_x402_config
-        from ag402_core.gateway.auth import PaymentVerifier
-        from ag402_core.payment.registry import PaymentProviderRegistry
+        try:
+            from ag402_core.config import load_config as load_x402_config
+            from ag402_core.gateway.auth import PaymentVerifier
+            from ag402_core.payment.registry import PaymentProviderRegistry
+        except ImportError as exc:
+            logger.error(
+                "[GATEWAY] X402_MODE=production requires Solana crypto dependencies. "
+                'Install them with: pip install "ag402-core[crypto]"  (error: %s)',
+                exc,
+            )
+            sys.exit(1)
 
         x402_cfg = load_x402_config()
         provider = PaymentProviderRegistry.get_provider(config=x402_cfg)
