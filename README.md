@@ -1,5 +1,7 @@
 # Token RugCheck MCP
 
+> **Disclaimer:** This software is provided for informational purposes only. It is **not financial advice (NFA)**. Token safety scores are based on automated heuristics and may be inaccurate, incomplete, or outdated. **You could lose money** relying on this data. Always do your own research (DYOR) and consult a qualified financial advisor before making any investment decisions. The authors accept no liability for losses incurred through the use of this tool.
+
 Solana token safety audit for AI Agents — detect rug pulls before your agent buys. Powered by [ag402](https://github.com/AetherCore-Dev/ag402) micropayments.
 
 ## What It Does
@@ -257,8 +259,8 @@ RUGCHECK_LOG_LEVEL=warning
 X402_MODE=production
 X402_NETWORK=mainnet
 
-CACHE_TTL_SECONDS=30
-CACHE_MAX_SIZE=10000
+CACHE_TTL_SECONDS=3
+CACHE_MAX_SIZE=5000
 
 # Your mainnet USDC receiving address
 AG402_ADDRESS=<your_mainnet_wallet_address>
@@ -468,7 +470,7 @@ GET /health
 | Field | Type | Description |
 |-------|------|-------------|
 | `data_sources` | `string[]` | Which upstream APIs returned data |
-| `data_completeness` | `string` | `full` / `partial` / `minimal` |
+| `data_completeness` | `string` | `full` / `partial` / `minimal` / `unavailable` |
 | `cache_hit` | `bool` | Whether this response came from cache |
 | `data_age_seconds` | `int\|null` | `0` = fresh fetch, `>0` = seconds since original fetch |
 | `response_time_ms` | `int` | Server-side processing time |
@@ -487,16 +489,16 @@ All settings via environment variables. See `.env.example` for a complete templa
 | `RUGCHECK_HOST` | `0.0.0.0` | Bind address |
 | `RUGCHECK_PORT` | `8000` | Bind port |
 | `RUGCHECK_LOG_LEVEL` | `info` | `debug` / `info` / `warning` / `error` |
-| `CACHE_TTL_SECONDS` | `30` | Cache TTL |
-| `CACHE_MAX_SIZE` | `10000` | Max cached entries (LRU eviction) |
+| `CACHE_TTL_SECONDS` | `3` | Cache TTL (seconds) — short to prevent stale data during rug pulls |
+| `CACHE_MAX_SIZE` | `5000` | Max cached entries (LRU eviction) |
 
 ### Upstream API
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GOPLUS_TIMEOUT_SECONDS` | `5` | GoPlus API timeout |
-| `RUGCHECK_API_TIMEOUT_SECONDS` | `5` | RugCheck API timeout |
-| `DEXSCREENER_TIMEOUT_SECONDS` | `5` | DexScreener API timeout |
+| `DEXSCREENER_TIMEOUT_SECONDS` | `1.5` | DexScreener API timeout (CDN-backed, fastest) |
+| `GOPLUS_TIMEOUT_SECONDS` | `2.5` | GoPlus API timeout (commercial API) |
+| `RUGCHECK_API_TIMEOUT_SECONDS` | `3.5` | RugCheck API timeout (community API) |
 | `GOPLUS_APP_KEY` | _(empty)_ | GoPlus API key (optional, raises rate limit) |
 | `GOPLUS_APP_SECRET` | _(empty)_ | GoPlus API secret |
 
@@ -584,7 +586,7 @@ src/rugcheck/
 
 ### Design Notes
 
-- **Cache TTL 30s** — for on-chain security data, freshness beats speed
+- **Cache TTL 3s** — prevents stale data during pool drains; same-second agent bursts still hit cache
 - **Liquidity exemption** — tokens with >= $1M liquidity are exempt from LP-protection and holder-concentration rules, preventing false positives on BONK/WIF/JUP
 - **Single worker** — in-memory cache is per-process; use `--workers 1` (default) or switch to Redis for multi-worker
 

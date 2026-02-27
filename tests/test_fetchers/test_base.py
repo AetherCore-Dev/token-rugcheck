@@ -10,6 +10,8 @@ class DummyFetcher(BaseFetcher):
     """Fetcher that raises configurable exceptions."""
 
     source_name = "Dummy"
+    # Disable retries in unit tests to isolate error-handling behaviour.
+    MAX_RETRIES = 0
 
     def __init__(self, client, exc_to_raise=None, **kwargs):
         super().__init__(client, **kwargs)

@@ -47,7 +47,9 @@ class Aggregator:
             await self._client.aclose()
 
     # Hard cap on the total time we spend fetching from all upstream APIs.
-    AGGREGATE_TIMEOUT: float = 15.0
+    # Must fit within the server's wait_for (4.5s) with margin for
+    # build_report + JSON serialization.
+    AGGREGATE_TIMEOUT: float = 4.0
 
     async def aggregate(self, mint_address: str) -> AggregatedData:
         """Fetch all sources concurrently and merge into AggregatedData.

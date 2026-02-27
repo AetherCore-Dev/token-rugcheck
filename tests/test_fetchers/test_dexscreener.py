@@ -68,7 +68,9 @@ async def test_dexscreener_no_pairs(httpx_mock):
 
 
 async def test_dexscreener_timeout(httpx_mock):
-    httpx_mock.add_exception(httpx.ReadTimeout("timeout"))
+    # Register 2 timeouts: 1 initial + 1 retry (timeout is retryable)
+    for _ in range(2):
+        httpx_mock.add_exception(httpx.ReadTimeout("timeout"))
     async with httpx.AsyncClient() as client:
         fetcher = DexScreenerFetcher(client, timeout=0.1)
         result = await fetcher.fetch(MINT)
@@ -78,7 +80,9 @@ async def test_dexscreener_timeout(httpx_mock):
 
 
 async def test_dexscreener_http_error(httpx_mock):
-    httpx_mock.add_response(status_code=503)
+    # Register 2 responses: 1 initial + 1 retry (503 is retryable)
+    for _ in range(2):
+        httpx_mock.add_response(status_code=503)
     async with httpx.AsyncClient() as client:
         fetcher = DexScreenerFetcher(client, timeout=3.0)
         result = await fetcher.fetch(MINT)

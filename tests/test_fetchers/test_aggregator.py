@@ -76,7 +76,9 @@ async def test_all_sources_succeed(httpx_mock):
 async def test_one_source_fails(httpx_mock):
     httpx_mock.add_response(url=re.compile(r".*rugcheck.*"), json=RUGCHECK_RESP)
     httpx_mock.add_response(url=re.compile(r".*dexscreener.*"), json=DEXSCREENER_RESP)
-    httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*gopluslabs.*"))
+    # Register 2 timeouts for GoPlus: 1 initial + 1 retry (timeout is retryable)
+    for _ in range(2):
+        httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*gopluslabs.*"))
 
     async with httpx.AsyncClient() as client:
         agg = Aggregator(CONFIG, client=client)
@@ -88,9 +90,11 @@ async def test_one_source_fails(httpx_mock):
 
 
 async def test_all_sources_fail(httpx_mock):
-    httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*rugcheck.*"))
-    httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*dexscreener.*"))
-    httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*gopluslabs.*"))
+    # Register 2 timeouts per source: 1 initial + 1 retry (timeout is retryable)
+    for _ in range(2):
+        httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*rugcheck.*"))
+        httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*dexscreener.*"))
+        httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*gopluslabs.*"))
 
     async with httpx.AsyncClient() as client:
         agg = Aggregator(CONFIG, client=client)
@@ -140,9 +144,11 @@ async def test_upstream_health_tracked_on_success(httpx_mock):
 
 async def test_upstream_health_tracked_on_failure(httpx_mock):
     """Aggregator should track last_failure_time when all sources fail."""
-    httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*rugcheck.*"))
-    httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*dexscreener.*"))
-    httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*gopluslabs.*"))
+    # Register 2 timeouts per source: 1 initial + 1 retry (timeout is retryable)
+    for _ in range(2):
+        httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*rugcheck.*"))
+        httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*dexscreener.*"))
+        httpx_mock.add_exception(httpx.ReadTimeout("timeout"), url=re.compile(r".*gopluslabs.*"))
 
     async with httpx.AsyncClient() as client:
         agg = Aggregator(CONFIG, client=client)

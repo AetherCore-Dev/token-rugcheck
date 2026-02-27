@@ -118,7 +118,7 @@ class AuditMetadata(BaseModel):
     """Metadata about the audit request."""
 
     data_sources: list[str] = Field(default_factory=list)
-    data_completeness: str = "full"  # "full" | "partial" | "minimal"
+    data_completeness: str = "unknown"  # "full" | "partial" | "minimal" | "unavailable" | "unknown"
     cache_hit: bool = False
     data_age_seconds: int | None = None
     response_time_ms: int = 0

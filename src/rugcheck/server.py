@@ -17,7 +17,7 @@ from rugcheck.cache import TTLCache
 from rugcheck.config import Config, load_config
 from rugcheck.engine.risk_engine import build_report
 from rugcheck.fetchers.aggregator import Aggregator
-from rugcheck.models import AuditReport
+from rugcheck.models import AggregatedData, AuditReport, RiskLevel
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,30 @@ class RateLimiter:
 
         # No limit configured for this path
         return True, 0
+
+
+def _build_degraded_report(
+    mint_address: str, data: AggregatedData, elapsed_ms: int
+) -> AuditReport:
+    """Build a degraded report when all upstream sources are unavailable.
+
+    Overrides the action layer to avoid a misleading ``is_safe=True`` verdict
+    that the risk engine would produce when it has no data to evaluate.
+    Degraded reports are intentionally NOT cached so subsequent requests
+    retry the upstream sources.
+    """
+    report = build_report(mint_address, data, response_time_ms=elapsed_ms)
+    report.metadata.data_completeness = "unavailable"
+    report.metadata.data_age_seconds = 0
+    # Override action layer — "no data" must NOT appear safe
+    report.action.is_safe = False
+    report.action.risk_level = RiskLevel.CRITICAL
+    report.action.risk_score = 100
+    report.analysis.summary = (
+        "All upstream data sources are currently unavailable. "
+        "Cannot assess token safety. Do NOT trade based on this report."
+    )
+    return report
 
 
 def create_app(config: Config | None = None, aggregator: Aggregator | None = None) -> FastAPI:
@@ -148,20 +172,21 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
 
         t0 = time.monotonic()
         try:
-            data = await asyncio.wait_for(agg.aggregate(mint_address), timeout=20.0)
+            data = await asyncio.wait_for(agg.aggregate(mint_address), timeout=4.5)
         except asyncio.TimeoutError:
             logger.error("[AUDIT] aggregate() hard timeout for %s", mint_address[:16])
-            raise HTTPException(
-                status_code=503,
-                detail="Upstream data sources timed out. Please try again later.",
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            data = AggregatedData(
+                sources_succeeded=[],
+                sources_failed=["RugCheck", "DexScreener", "GoPlus"],
             )
+            report = _build_degraded_report(mint_address, data, elapsed_ms)
+            return report
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 
         if not data.sources_succeeded:
-            raise HTTPException(
-                status_code=503,
-                detail="All upstream data sources unavailable. Please try again later.",
-            )
+            report = _build_degraded_report(mint_address, data, elapsed_ms)
+            return report
 
         report = build_report(mint_address, data, response_time_ms=elapsed_ms)
         report.metadata.data_age_seconds = 0

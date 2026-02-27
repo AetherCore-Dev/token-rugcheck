@@ -44,7 +44,7 @@ Cloudflare CDN  ← 域名: api.aethercore.dev
 │  │   0.0.0.0:8000 → container:8000           │  │
 │  │   - 三层审计报告 (Action/Analysis/Evidence) │  │
 │  │   - 三数据源 (RugCheck + GoPlus + DexScreener)││
-│  │   - TTL 缓存 (30s, LRU 10000)             │  │
+│  │   - TTL 缓存 (3s, LRU 5000)              │  │
 │  │   - IP 限流 (audit 60/min, stats 10/min)  │  │
 │  └────────────────────────────────────────────┘  │
 │                                                  │
@@ -358,7 +358,7 @@ pip install "ag402-core[crypto]" httpx
 
 export X402_MODE=production
 export X402_NETWORK=devnet
-export SOLANA_PRIVATE_KEY=28cXvjQLMxyyHRVHVWMkhgSdY6z1xgpRAnmuwcLFPF2drTR2eFsPqR2AXamqqmwQs9QRthBg1Cgm2cmjx6D3oz1k
+export SOLANA_PRIVATE_KEY=<your_devnet_buyer_private_key>
 export SOLANA_RPC_URL=https://api.devnet.solana.com
 
 # 付费查询
@@ -475,7 +475,8 @@ docker compose logs ag402-gateway 2>&1 | grep "\[GATEWAY\] Payment verified"
 |------|------|------|
 | Gateway 反复重启 | `X402_MODE=production` 但缺 `SOLANA_PRIVATE_KEY` | 在 `.env` 中设置私钥, 或切回 `test` 模式 |
 | Gateway 启动报 `ImportError: solana` | Docker 镜像缺 crypto 依赖 | `Dockerfile.gateway` 需包含 `pip install "ag402-core[crypto]"` |
-| 审计返回 `data_completeness: partial` | 上游 API 超时或限流 | 检查日志中 GoPlus/RugCheck/DexScreener 的报错 |
+| 审计返回 `data_completeness: partial` | 部分上游 API 超时或限流 | 检查日志中 GoPlus/RugCheck/DexScreener 的报错 |
+| 审计返回 `data_completeness: unavailable` | 全部上游 API 不可用 | 检查网络; 降级报告标记 CRITICAL, 不缓存, 下次请求重试 |
 | 链上支付后 gateway 返回 403 | 交易验证失败 | 检查 `SOLANA_RPC_URL` 可达性, 检查 USDC mint 地址是否匹配 devnet |
 | `ag402 pay` 本地失败 | 本地网络无法连 Solana RPC | 公司代理阻断, 换 RPC 或在服务器运行测试 |
 | HTTPS 502 Bad Gateway | Cloudflare 连不到 origin 80 端口 | 检查 `ufw allow 80/tcp`, 检查容器是否 running |
@@ -505,13 +506,19 @@ RUGCHECK_PORT=8000
 RUGCHECK_LOG_LEVEL=info               # debug | info | warning | error
 
 # ===== 缓存 =====
-CACHE_TTL_SECONDS=30                  # 审计结果缓存 TTL
-CACHE_MAX_SIZE=10000                  # LRU 最大条目数
+# TTL=3s: 防 Rug 核心 — 撤池子到链上确认 ~12 秒, 3 秒缓存
+# 确保 Agent 拿到的数据最多延迟 3 秒, 同秒高并发仍走缓存
+CACHE_TTL_SECONDS=3
+CACHE_MAX_SIZE=5000                   # ~5000 JSON ≈ 几十 MB, 低配机器无压力
 
-# ===== 上游 API 超时 =====
-GOPLUS_TIMEOUT_SECONDS=5
-RUGCHECK_API_TIMEOUT_SECONDS=5
-DEXSCREENER_TIMEOUT_SECONDS=3
+# ===== 上游 API 超时 (秒) =====
+# 按 4.5 秒全局响应预算分级:
+#   DexScreener: CDN 驱动, 最快, 最严格
+#   GoPlus:      商业级安全接口, 中等容忍
+#   RugCheck:    社区接口偶尔波动, 最宽容
+DEXSCREENER_TIMEOUT_SECONDS=1.5
+GOPLUS_TIMEOUT_SECONDS=2.5
+RUGCHECK_API_TIMEOUT_SECONDS=3.5
 
 # ===== GoPlus 认证 (可选, 提高限流上限) =====
 GOPLUS_APP_KEY=
@@ -533,7 +540,38 @@ SOLANA_PRIVATE_KEY=<base58 私钥>       # 用于初始化 SolanaAdapter (验证
 SOLANA_RPC_URL=https://api.devnet.solana.com
 ```
 
-### 7.2 docker-compose.yml 端口映射
+### 7.2 四层防线参数速查
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    4.5 秒全局响应预算                        │
+│                                                             │
+│  第1层: 分级超时 (毫秒级防线)                               │
+│    DexScreener  1.5s ─┐                                     │
+│    GoPlus       2.5s ─┼─ 并行 fetch ─→ 聚合超时 4.0s       │
+│    RugCheck     3.5s ─┘                                     │
+│    + 每源 1 次重试 (0.3s 退避, 仅最快源有效)                │
+│    + server wait_for = 4.5s                                 │
+│                                                             │
+│  第2层: 极短缓存 (鲜活度防线)                               │
+│    TTL = 3s (防撤池子时间差)                                │
+│    LRU = 5000 条 (~几十 MB)                                 │
+│                                                             │
+│  第3层: 并发与限流 (熔断防线)                               │
+│    上游并发信号量 = 20                                      │
+│    /audit 限流: 60/min (per IP)                             │
+│    /stats 限流: 10/min (per IP)                             │
+│    localhost 免限流 (ag402 gateway 回环)                     │
+│                                                             │
+│  第4层: 降级响应 (支付保护防线)                             │
+│    全源失败 → 200 + data_completeness="unavailable"         │
+│    聚合超时 → 200 + data_completeness="unavailable"         │
+│    降级报告: is_safe=false, risk_score=100, CRITICAL        │
+│    降级报告不缓存 → 下次请求重试上游                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 7.3 docker-compose.yml 端口映射
 
 ```yaml
 services:
@@ -548,7 +586,7 @@ services:
       - AG402_TARGET_URL=http://audit-server:8000   # Docker 内部通信
 ```
 
-### 7.3 Cloudflare 设置
+### 7.4 Cloudflare 设置
 
 | 配置项 | 值 |
 |--------|-----|

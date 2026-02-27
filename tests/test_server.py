@@ -105,7 +105,13 @@ async def test_audit_invalid_address(safe_app):
 async def test_audit_all_sources_down(failing_app):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=failing_app), base_url="http://test") as client:
         resp = await client.get(f"/audit/{MINT}")
-    assert resp.status_code == 503
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["metadata"]["data_completeness"] == "unavailable"
+    # Degraded reports must NOT appear safe — no data ≠ safe
+    assert data["action"]["is_safe"] is False
+    assert data["action"]["risk_level"] == "CRITICAL"
+    assert data["action"]["risk_score"] == 100
 
 
 async def test_health(safe_app):
@@ -280,7 +286,7 @@ async def test_data_age_positive_on_cache_hit():
 
 
 async def test_audit_aggregate_timeout():
-    """If aggregate() exceeds the 20s hard timeout, server returns 503."""
+    """If aggregate() exceeds the 4.5s hard timeout, server returns degraded 200."""
     import asyncio as _asyncio
 
     class SlowAggregator:
@@ -288,7 +294,7 @@ async def test_audit_aggregate_timeout():
         last_failure_time = None
 
         async def aggregate(self, mint_address: str):
-            await _asyncio.sleep(30)  # exceed the 20s server timeout
+            await _asyncio.sleep(10)  # exceed the 4.5s server timeout
 
         async def close(self):
             pass
@@ -296,5 +302,9 @@ async def test_audit_aggregate_timeout():
     app = create_app(CONFIG, aggregator=SlowAggregator())
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get(f"/audit/{MINT}")
-    assert resp.status_code == 503
-    assert "timed out" in resp.json()["detail"].lower()
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["metadata"]["data_completeness"] == "unavailable"
+    # Degraded reports must NOT appear safe
+    assert data["action"]["is_safe"] is False
+    assert data["action"]["risk_level"] == "CRITICAL"

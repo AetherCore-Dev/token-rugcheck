@@ -76,7 +76,9 @@ async def test_rugcheck_empty_response(httpx_mock):
 
 
 async def test_rugcheck_timeout(httpx_mock):
-    httpx_mock.add_exception(httpx.ReadTimeout("timeout"))
+    # Register 2 timeouts: 1 initial + 1 retry (timeout is retryable)
+    for _ in range(2):
+        httpx_mock.add_exception(httpx.ReadTimeout("timeout"))
     async with httpx.AsyncClient() as client:
         fetcher = RugCheckFetcher(client, timeout=0.1)
         result = await fetcher.fetch(MINT)
@@ -86,7 +88,9 @@ async def test_rugcheck_timeout(httpx_mock):
 
 
 async def test_rugcheck_429(httpx_mock):
-    httpx_mock.add_response(status_code=429)
+    # Register 2 responses: 1 initial + 1 retry (429 is retryable)
+    for _ in range(2):
+        httpx_mock.add_response(status_code=429)
     async with httpx.AsyncClient() as client:
         fetcher = RugCheckFetcher(client, timeout=5.0)
         result = await fetcher.fetch(MINT)
