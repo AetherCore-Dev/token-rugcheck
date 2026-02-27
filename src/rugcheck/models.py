@@ -134,6 +134,7 @@ class AuditReport(BaseModel):
     contract_address: str
     chain: str = "solana"
     audit_timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    degraded: bool = False
 
     action: ActionLayer
     analysis: AnalysisLayer

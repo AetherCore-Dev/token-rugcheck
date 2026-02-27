@@ -45,6 +45,10 @@ class Config:
     ag402_network: str = "devnet"
     ag402_gateway_port: int = 8001
 
+    # Rate limiting
+    free_daily_quota: int = 20
+    paid_rate_limit: int = 120
+
 
 def load_config() -> Config:
     """Build Config from environment variables with sensible defaults."""
@@ -65,6 +69,8 @@ def load_config() -> Config:
         ag402_token=os.getenv("AG402_TOKEN", "USDC"),
         ag402_network=os.getenv("X402_NETWORK", "devnet"),
         ag402_gateway_port=int(os.getenv("AG402_GATEWAY_PORT", "8001")),
+        free_daily_quota=int(os.getenv("FREE_DAILY_QUOTA", "20")),
+        paid_rate_limit=int(os.getenv("PAID_RATE_LIMIT", "120")),
     )
 
     if cfg.ag402_address == _PLACEHOLDER_ADDRESS:

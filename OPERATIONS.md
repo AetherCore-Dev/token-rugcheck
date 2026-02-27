@@ -9,7 +9,8 @@
 - [5. 日常运维](#5-日常运维)
 - [6. 故障排查](#6-故障排查)
 - [7. 关键配置参考](#7-关键配置参考)
-- [8. 踩坑记录](#8-踩坑记录)
+- [8. 监控 (Prometheus)](#8-监控-prometheus)
+- [9. 踩坑记录](#9-踩坑记录)
 
 ---
 
@@ -45,7 +46,8 @@ Cloudflare CDN  ← 域名: api.aethercore.dev
 │  │   - 三层审计报告 (Action/Analysis/Evidence) │  │
 │  │   - 三数据源 (RugCheck + GoPlus + DexScreener)││
 │  │   - TTL 缓存 (3s, LRU 5000)              │  │
-│  │   - IP 限流 (audit 60/min, stats 10/min)  │  │
+│  │   - 免费每日额度 + 付费 per-min 限流       │  │
+│  │   - Prometheus /metrics 端点              │  │
 │  └────────────────────────────────────────────┘  │
 │                                                  │
 │  Firewall (ufw): 22, 80, 8000 open              │
@@ -511,6 +513,10 @@ RUGCHECK_LOG_LEVEL=info               # debug | info | warning | error
 CACHE_TTL_SECONDS=3
 CACHE_MAX_SIZE=5000                   # ~5000 JSON ≈ 几十 MB, 低配机器无压力
 
+# ===== 限流 =====
+FREE_DAILY_QUOTA=20                  # 免费用户每 IP 每日审计次数
+PAID_RATE_LIMIT=120                  # 付费用户 (loopback) 每分钟审计次数
+
 # ===== 上游 API 超时 (秒) =====
 # 按 4.5 秒全局响应预算分级:
 #   DexScreener: CDN 驱动, 最快, 最严格
@@ -559,14 +565,16 @@ SOLANA_RPC_URL=https://api.devnet.solana.com
 │                                                             │
 │  第3层: 并发与限流 (熔断防线)                               │
 │    上游并发信号量 = 20                                      │
-│    /audit 限流: 60/min (per IP)                             │
-│    /stats 限流: 10/min (per IP)                             │
-│    localhost 免限流 (ag402 gateway 回环)                     │
+│    /audit 限流 (免费): 每日 20 次 (FREE_DAILY_QUOTA)        │
+│    /audit 限流 (付费): 120/min (PAID_RATE_LIMIT, loopback)  │
+│    /stats 限流: 10/min (per IP, 非 loopback)               │
+│    /health, /metrics 无限流                                 │
 │                                                             │
 │  第4层: 降级响应 (支付保护防线)                             │
 │    全源失败 → 200 + data_completeness="unavailable"         │
 │    聚合超时 → 200 + data_completeness="unavailable"         │
 │    降级报告: is_safe=false, risk_score=100, CRITICAL        │
+│    降级报告: degraded=true (顶层字段, 客户端可识别)         │
 │    降级报告不缓存 → 下次请求重试上游                        │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -597,7 +605,47 @@ services:
 
 ---
 
-## 8. 踩坑记录
+## 8. 监控 (Prometheus)
+
+### 8.1 /metrics 端点
+
+审计服务暴露标准 Prometheus 指标：
+
+```bash
+curl http://localhost:8000/metrics
+```
+
+### 8.2 可用指标
+
+| 指标名 | 类型 | 标签 | 说明 |
+|--------|------|------|------|
+| `rugcheck_requests_total` | Counter | method, path, status | HTTP 请求总数 |
+| `rugcheck_request_duration_seconds` | Histogram | method, path | 请求耗时 |
+| `rugcheck_upstream_success_total` | Counter | source | 上游成功次数 |
+| `rugcheck_upstream_failure_total` | Counter | source | 上游失败次数 |
+| `rugcheck_cache_hits_total` | Counter | — | 缓存命中 |
+| `rugcheck_cache_misses_total` | Counter | — | 缓存未命中 |
+
+### 8.3 Grafana 接入建议
+
+1. Prometheus `scrape_configs` 添加:
+   ```yaml
+   - job_name: 'rugcheck'
+     static_configs:
+       - targets: ['localhost:8000']
+     metrics_path: '/metrics'
+     scrape_interval: 15s
+   ```
+
+2. 推荐 Dashboard 面板:
+   - **QPS**: `rate(rugcheck_requests_total[1m])`
+   - **P99 延迟**: `histogram_quantile(0.99, rate(rugcheck_request_duration_seconds_bucket[5m]))`
+   - **上游成功率**: `rate(rugcheck_upstream_success_total[5m]) / (rate(rugcheck_upstream_success_total[5m]) + rate(rugcheck_upstream_failure_total[5m]))`
+   - **缓存命中率**: `rate(rugcheck_cache_hits_total[5m]) / (rate(rugcheck_cache_hits_total[5m]) + rate(rugcheck_cache_misses_total[5m]))`
+
+---
+
+## 9. 踩坑记录
 
 部署过程中实际遇到的问题, 避免重复踩坑:
 

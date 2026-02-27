@@ -11,7 +11,8 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
 from rugcheck.cache import TTLCache
 from rugcheck.config import Config, load_config
@@ -35,47 +36,117 @@ UPSTREAM_HEALTHY_WINDOW = 120  # 2 minutes
 class RateLimiter:
     """Simple in-memory sliding-window rate limiter keyed by IP."""
 
-    # Loopback addresses are exempt from rate limiting.  The ag402 payment
-    # gateway runs on the same host and proxies requests through localhost;
-    # its 402→pay→retry handshake would otherwise consume multiple rate-limit
-    # slots per logical request.
-    EXEMPT_IPS: frozenset[str] = frozenset({"127.0.0.1", "::1"})
-
-    def __init__(self):
-        # path_prefix -> (max_requests, window_seconds)
-        self._limits: dict[str, tuple[int, int]] = {}
-        # (path_prefix, ip) -> list of request timestamps
-        self._windows: dict[tuple[str, str], list[float]] = defaultdict(list)
+    def __init__(self, max_requests: int, window_seconds: int):
+        self._max_requests = max_requests
+        self._window_seconds = window_seconds
+        # ip -> list of request timestamps
+        self._windows: dict[str, list[float]] = defaultdict(list)
         self._lock = asyncio.Lock()
 
-    def add_limit(self, path_prefix: str, max_requests: int, window_seconds: int) -> None:
-        self._limits[path_prefix] = (max_requests, window_seconds)
-
-    async def check(self, path: str, client_ip: str) -> tuple[bool, int]:
+    async def check(self, client_ip: str) -> tuple[bool, int]:
         """Return (allowed, retry_after_seconds). retry_after is 0 when allowed."""
-        if client_ip in self.EXEMPT_IPS or client_ip == "unknown":
+        if client_ip == "unknown":
             return True, 0
 
-        for prefix, (max_req, window) in self._limits.items():
-            if path.startswith(prefix):
-                async with self._lock:
-                    now = time.monotonic()
-                    key = (prefix, client_ip)
-                    timestamps = self._windows[key]
+        async with self._lock:
+            now = time.monotonic()
+            timestamps = self._windows[client_ip]
 
-                    # Prune expired entries
-                    cutoff = now - window
-                    timestamps[:] = [t for t in timestamps if t > cutoff]
+            # Prune expired entries
+            cutoff = now - self._window_seconds
+            timestamps[:] = [t for t in timestamps if t > cutoff]
 
-                    if len(timestamps) >= max_req:
-                        retry_after = int(timestamps[0] - cutoff) + 1
-                        return False, max(retry_after, 1)
+            if len(timestamps) >= self._max_requests:
+                retry_after = int(timestamps[0] - cutoff) + 1
+                return False, max(retry_after, 1)
 
-                    timestamps.append(now)
-                    return True, 0
+            timestamps.append(now)
+            return True, 0
 
-        # No limit configured for this path
-        return True, 0
+
+class DailyQuota:
+    """Per-IP daily request quota. Resets at UTC midnight."""
+
+    def __init__(self, max_daily: int):
+        self._max_daily = max_daily
+        # ip -> (date_str, count)
+        self._counts: dict[str, tuple[str, int]] = {}
+        self._lock = asyncio.Lock()
+
+    async def check(self, client_ip: str) -> tuple[bool, int]:
+        """Return (allowed, remaining). remaining is 0 when exhausted."""
+        if client_ip == "unknown":
+            return True, self._max_daily
+
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        async with self._lock:
+            entry = self._counts.get(client_ip)
+            if entry is None or entry[0] != today:
+                # New day or first request — reset
+                self._counts[client_ip] = (today, 1)
+                return True, self._max_daily - 1
+
+            date_str, count = entry
+            if count >= self._max_daily:
+                return False, 0
+
+            self._counts[client_ip] = (today, count + 1)
+            return True, self._max_daily - count - 1
+
+
+# Loopback IPs — requests from the ag402 gateway running on the same host.
+GATEWAY_IPS: frozenset[str] = frozenset({"127.0.0.1", "::1"})
+
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics
+# ---------------------------------------------------------------------------
+
+REQUEST_COUNT = Counter(
+    "rugcheck_requests_total",
+    "Total HTTP requests",
+    ["method", "path", "status"],
+)
+REQUEST_DURATION = Histogram(
+    "rugcheck_request_duration_seconds",
+    "HTTP request duration",
+    ["method", "path"],
+)
+UPSTREAM_SUCCESS = Counter(
+    "rugcheck_upstream_success_total",
+    "Successful upstream fetches",
+    ["source"],
+)
+UPSTREAM_FAILURE = Counter(
+    "rugcheck_upstream_failure_total",
+    "Failed upstream fetches",
+    ["source"],
+)
+CACHE_HIT_TOTAL = Counter(
+    "rugcheck_cache_hits_total",
+    "Cache hits",
+)
+CACHE_MISS_TOTAL = Counter(
+    "rugcheck_cache_misses_total",
+    "Cache misses",
+)
+
+
+def _normalize_path(path: str) -> str:
+    """Collapse /audit/<dynamic> into /audit/{mint_address} to avoid cardinality explosion."""
+    if path.startswith("/audit/"):
+        return "/audit/{mint_address}"
+    return path
+
+
+def _record_upstream_metrics(data: AggregatedData) -> None:
+    """Increment per-source success/failure counters."""
+    for src in data.sources_succeeded:
+        UPSTREAM_SUCCESS.labels(source=src).inc()
+    for src in data.sources_failed:
+        UPSTREAM_FAILURE.labels(source=src).inc()
 
 
 def _build_degraded_report(
@@ -89,6 +160,7 @@ def _build_degraded_report(
     retry the upstream sources.
     """
     report = build_report(mint_address, data, response_time_ms=elapsed_ms)
+    report.degraded = True
     report.metadata.data_completeness = "unavailable"
     report.metadata.data_age_seconds = 0
     # Override action layer — "no data" must NOT appear safe
@@ -116,10 +188,10 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
     # Store aggregator in a mutable container so lifespan and routes can share it
     state = {"aggregator": aggregator, "total_requests": 0}
 
-    # Rate limiter
-    rate_limiter = RateLimiter()
-    rate_limiter.add_limit("/audit", max_requests=60, window_seconds=60)
-    rate_limiter.add_limit("/stats", max_requests=10, window_seconds=60)
+    # Rate limiters — differentiated for free vs paid (gateway) users
+    paid_limiter = RateLimiter(max_requests=cfg.paid_rate_limit, window_seconds=60)
+    stats_limiter = RateLimiter(max_requests=10, window_seconds=60)
+    free_daily = DailyQuota(max_daily=cfg.free_daily_quota)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -142,15 +214,53 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
 
     @app.middleware("http")
     async def rate_limit_middleware(request: Request, call_next):
+        path = request.url.path
         client_ip = request.client.host if request.client else "unknown"
-        allowed, retry_after = await rate_limiter.check(request.url.path, client_ip)
-        if not allowed:
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "Too many requests. Please slow down."},
-                headers={"Retry-After": str(retry_after)},
-            )
+        is_loopback = client_ip in GATEWAY_IPS
+
+        if path.startswith("/audit"):
+            if is_loopback:
+                # Paid user via gateway — per-minute limit
+                allowed, retry_after = await paid_limiter.check(client_ip)
+                if not allowed:
+                    return JSONResponse(
+                        status_code=429,
+                        content={"detail": "Too many requests. Please slow down."},
+                        headers={"Retry-After": str(retry_after)},
+                    )
+            else:
+                # Free user — daily quota
+                allowed, remaining = await free_daily.check(client_ip)
+                if not allowed:
+                    return JSONResponse(
+                        status_code=429,
+                        content={
+                            "detail": "Daily free quota exceeded. "
+                            "Pay via ag402 gateway for higher limits.",
+                        },
+                        headers={"Retry-After": "86400"},
+                    )
+        elif path.startswith("/stats") and not is_loopback:
+            allowed, retry_after = await stats_limiter.check(client_ip)
+            if not allowed:
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too many requests. Please slow down."},
+                    headers={"Retry-After": str(retry_after)},
+                )
+
         return await call_next(request)
+
+    @app.middleware("http")
+    async def metrics_middleware(request: Request, call_next):
+        path = _normalize_path(request.url.path)
+        method = request.method
+        t0 = time.monotonic()
+        response = await call_next(request)
+        duration = time.monotonic() - t0
+        REQUEST_COUNT.labels(method=method, path=path, status=response.status_code).inc()
+        REQUEST_DURATION.labels(method=method, path=path).observe(duration)
+        return response
 
     @app.get("/audit/{mint_address}", response_model=AuditReport)
     async def audit(mint_address: str) -> AuditReport:
@@ -161,6 +271,7 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
 
         cached, data_age = await cache.get(mint_address)
         if cached is not None:
+            CACHE_HIT_TOTAL.inc()
             logger.info("[AUDIT] Cache HIT for %s", mint_address[:16])
             cached.metadata.cache_hit = True
             cached.metadata.data_age_seconds = int(data_age)
@@ -170,6 +281,7 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
         if agg is None:
             raise HTTPException(status_code=503, detail="Service not initialized")
 
+        CACHE_MISS_TOTAL.inc()
         t0 = time.monotonic()
         try:
             data = await asyncio.wait_for(agg.aggregate(mint_address), timeout=4.5)
@@ -180,9 +292,12 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
                 sources_succeeded=[],
                 sources_failed=["RugCheck", "DexScreener", "GoPlus"],
             )
+            _record_upstream_metrics(data)
             report = _build_degraded_report(mint_address, data, elapsed_ms)
             return report
         elapsed_ms = int((time.monotonic() - t0) * 1000)
+
+        _record_upstream_metrics(data)
 
         if not data.sources_succeeded:
             report = _build_degraded_report(mint_address, data, elapsed_ms)
@@ -246,5 +361,9 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
             "total_requests": state["total_requests"],
             "cache": cache.stats,
         }
+
+    @app.get("/metrics")
+    async def metrics():
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     return app

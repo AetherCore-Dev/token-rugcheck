@@ -407,11 +407,12 @@ docker compose up -d --build    # Rebuild after code changes
 
 | Method | Path | Rate Limit | Description |
 |--------|------|------------|-------------|
-| GET | `/audit/{mint_address}` | 60/min per IP | Full safety audit report |
+| GET | `/audit/{mint_address}` | Free: 20/day per IP; Paid (loopback): 120/min | Full safety audit report |
 | GET | `/health` | Unlimited | Service health + upstream status |
-| GET | `/stats` | 10/min per IP | Request counts + cache hit rate |
+| GET | `/stats` | 10/min per IP (non-loopback) | Request counts + cache hit rate |
+| GET | `/metrics` | Unlimited | Prometheus metrics endpoint |
 
-Rate-limited requests return `429 Too Many Requests` with a `Retry-After` header. Loopback addresses (`127.0.0.1`, `::1`) are exempt from rate limiting to support the ag402 gateway proxy.
+Free users who exceed their daily quota receive `429` with a message directing them to the ag402 payment gateway. Paid users (routed through the gateway on localhost) have a higher per-minute limit.
 
 ### Health Check
 
@@ -431,6 +432,7 @@ GET /health
   "contract_address": "7X...",
   "chain": "solana",
   "audit_timestamp": "2025-01-15T12:34:56.789012+00:00",
+  "degraded": false,
   "action": {
     "is_safe": false,
     "risk_level": "CRITICAL",
@@ -464,6 +466,7 @@ GET /health
 | `contract_address` | `string` | Solana token mint address |
 | `chain` | `string` | Always `"solana"` |
 | `audit_timestamp` | `string` | ISO 8601 timestamp of when the report was generated |
+| `degraded` | `bool` | `true` when all upstream sources failed — data is unavailable. Clients should treat `degraded` reports with extra caution: the risk verdict reflects missing data, not actual token analysis. |
 
 ### `metadata` Fields
 
@@ -491,6 +494,8 @@ All settings via environment variables. See `.env.example` for a complete templa
 | `RUGCHECK_LOG_LEVEL` | `info` | `debug` / `info` / `warning` / `error` |
 | `CACHE_TTL_SECONDS` | `3` | Cache TTL (seconds) — short to prevent stale data during rug pulls |
 | `CACHE_MAX_SIZE` | `5000` | Max cached entries (LRU eviction) |
+| `FREE_DAILY_QUOTA` | `20` | Max free audit requests per IP per day |
+| `PAID_RATE_LIMIT` | `120` | Max paid (loopback) audit requests per IP per minute |
 
 ### Upstream API
 
@@ -579,7 +584,8 @@ src/rugcheck/
 
 ### Security
 
-- **Rate limiting** — per-IP sliding window on `/audit` (60/min) and `/stats` (10/min); loopback exempt for gateway proxy
+- **Rate limiting** — free users: daily quota (20/day per IP); paid users via gateway: 120/min per IP; `/stats`: 10/min per IP
+- **Prometheus monitoring** — `/metrics` endpoint exposes request counts, latency histograms, upstream health, and cache hit rates
 - **Upstream protection** — `asyncio.Semaphore(20)` caps concurrent outbound API calls
 - **Error sanitization** — exceptions return categorized codes, never internal paths
 - **Cache safety** — all cache operations are `asyncio.Lock`-guarded
