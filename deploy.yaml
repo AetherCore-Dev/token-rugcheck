@@ -1,0 +1,157 @@
+# deploy.yaml — Machine-readable deployment specification
+# Token RugCheck MCP automated deployment contract
+#
+# This file defines the deployment pipeline as structured data,
+# enabling AI agents to execute deployments programmatically.
+
+version: "1.0"
+project: token-rugcheck-mcp
+description: "Solana token safety audit API monetized via ag402 micropayments"
+
+# =============================================================================
+# Human Inputs — collected before deployment begins
+# =============================================================================
+inputs:
+  required:
+    - name: server_ip
+      description: "Target server IP address"
+      type: string
+      validation: '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$'
+      example: "203.0.113.10"
+
+    - name: wallet_address
+      description: "Solana wallet address to receive payments"
+      type: string
+      validation: '^[1-9A-HJ-NP-Za-km-z]{32,44}$'
+      example: "fisJvtob3HfaTWoCynHLp9McFoFZ2gL3VEiA4p4QnNm"
+
+    - name: mode
+      description: "Deployment mode"
+      type: enum
+      values: [test, devnet, production]
+      default: devnet
+
+    - name: price
+      description: "USDC price per audit request"
+      type: string
+      validation: '^\d+(\.\d+)?$'
+      default: "0.05"
+
+  conditional:
+    - name: private_key
+      description: "Solana private key (base58, 44-88 chars)"
+      type: secret
+      validation: '^[1-9A-HJ-NP-Za-km-z]{44,88}$'
+      required_when: "mode in [devnet, production]"
+      note: "Required for on-chain payment verification"
+
+    - name: rpc_url
+      description: "Solana RPC URL"
+      type: string
+      required_when: "mode == production"
+      default_by_mode:
+        devnet: "https://api.devnet.solana.com"
+        production: "https://api.mainnet-beta.solana.com"
+
+  decisions:
+    - name: domain
+      description: "Custom domain for HTTPS access (e.g. api.example.com)"
+      type: string
+      required: false
+      note: "If provided, requires manual Cloudflare DNS setup"
+
+    - name: goplus_credentials
+      description: "GoPlus API key and secret for higher upstream rate limits"
+      type: object
+      required: false
+      fields:
+        - name: app_key
+          type: string
+        - name: app_secret
+          type: secret
+
+# =============================================================================
+# Deployment Phases
+# =============================================================================
+phases:
+  - name: server_init
+    description: "Initialize server (Docker, firewall, clone repo)"
+    type: automated
+    command: "ssh root@${server_ip} 'bash -s' < scripts/setup-server.sh"
+    exit_codes:
+      0: "Fresh setup completed"
+      1: "Error — check output"
+      2: "Already configured — updated to latest"
+    verify:
+      command: "ssh root@${server_ip} 'docker compose version && ufw status && ls /opt/token-bugcheck/docker-compose.yml'"
+      expect: "exit 0"
+
+  - name: configure
+    description: "Generate .env configuration"
+    type: automated
+    command: >
+      bash scripts/generate-env.sh
+      --mode ${mode}
+      --address ${wallet_address}
+      --price ${price}
+      --private-key ${private_key}
+      --rpc-url ${rpc_url}
+      --output /tmp/token-bugcheck.env
+    post_command: "scp /tmp/token-bugcheck.env root@${server_ip}:/opt/token-bugcheck/.env"
+    verify:
+      command: "ssh root@${server_ip} 'grep -c AG402_ADDRESS /opt/token-bugcheck/.env'"
+      expect: "1"
+
+  - name: deploy
+    description: "Build, start, and verify services"
+    type: automated
+    command: "ssh root@${server_ip} 'cd /opt/token-bugcheck && bash scripts/deploy.sh --server-ip ${server_ip}'"
+    verify:
+      command: "ssh root@${server_ip} 'bash /opt/token-bugcheck/scripts/verify.sh --phase L2'"
+      expect: "exit 0"
+
+  - name: domain_setup
+    description: "Configure Cloudflare DNS for custom domain"
+    type: human_required
+    required: false
+    condition: "domain is provided"
+    instructions:
+      - "Log in to Cloudflare dashboard"
+      - "Add DNS A record: ${domain} → ${server_ip}"
+      - "Set Proxy status: Proxied (orange cloud)"
+      - "SSL/TLS mode: Flexible"
+      - "Enable 'Always Use HTTPS'"
+    verify:
+      command: "bash scripts/verify.sh --domain ${domain} --phase L4"
+      expect: "exit 0"
+
+  - name: e2e_verify
+    description: "Full end-to-end verification"
+    type: automated
+    command: "ssh root@${server_ip} 'cd /opt/token-bugcheck && bash scripts/verify.sh --server-ip ${server_ip} --domain ${domain}'"
+    verify:
+      check: "VERIFY|SUMMARY output shows fail=0"
+
+# =============================================================================
+# Rollback
+# =============================================================================
+rollback:
+  deploy:
+    command: "ssh root@${server_ip} 'cd /opt/token-bugcheck && docker compose -f docker-compose.yml -f docker-compose.prod.yml down'"
+    description: "Stop all containers"
+
+  configure:
+    command: "ssh root@${server_ip} 'rm /opt/token-bugcheck/.env'"
+    description: "Remove generated .env"
+
+  server_init:
+    command: "ssh root@${server_ip} 'rm -rf /opt/token-bugcheck'"
+    description: "Remove cloned repository"
+
+# =============================================================================
+# Output format
+# =============================================================================
+output_format:
+  description: "All scripts output STATUS|COMPONENT|MESSAGE, parseable with split('|')"
+  statuses: [OK, FAIL, SKIP, INFO]
+  summary: "VERIFY|SUMMARY|pass=N fail=N skip=N"

@@ -1,0 +1,12 @@
+# docker-compose.prod.yml — Production port override
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Maps gateway to port 80 for Cloudflare origin (instead of 8001:8001 in dev).
+# Base docker-compose.yml is unchanged for local development.
+
+services:
+  ag402-gateway:
+    ports:
+      - "80:8001"

@@ -1,6 +1,11 @@
 # Token RugCheck MCP — Operations Skills Guide
 # 完整运维技能手册：上线、更新、运维、验证
 
+> **Automation scripts available:** The `scripts/` directory contains automation tools for AI-agent-driven deployments:
+> `setup-server.sh`, `generate-env.sh`, `deploy.sh`, `verify.sh`.
+> See [DEPLOY.md](DEPLOY.md) for the AI-agent deployment protocol and [deploy.yaml](deploy.yaml) for the machine-readable spec.
+> This document remains the authoritative reference for manual operations, monitoring, and troubleshooting.
+
 ## 目录
 - [1. 项目架构](#1-项目架构)
 - [2. 首次上线部署](#2-首次上线部署)
