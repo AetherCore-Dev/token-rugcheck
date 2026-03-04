@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import time
+import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
 
@@ -34,7 +35,14 @@ UPSTREAM_HEALTHY_WINDOW = 120  # 2 minutes
 # ---------------------------------------------------------------------------
 
 class RateLimiter:
-    """Simple in-memory sliding-window rate limiter keyed by IP."""
+    """Simple in-memory sliding-window rate limiter keyed by IP.
+
+    Includes periodic eviction of stale entries to prevent unbounded memory
+    growth from unique IPs that never return.
+    """
+
+    # Run global eviction every N calls to ``check()``.
+    _EVICT_EVERY: int = 256
 
     def __init__(self, max_requests: int, window_seconds: int):
         self._max_requests = max_requests
@@ -42,6 +50,7 @@ class RateLimiter:
         # ip -> list of request timestamps
         self._windows: dict[str, list[float]] = defaultdict(list)
         self._lock = asyncio.Lock()
+        self._check_count = 0
 
     async def check(self, client_ip: str) -> tuple[bool, int]:
         """Return (allowed, retry_after_seconds). retry_after is 0 when allowed."""
@@ -50,10 +59,22 @@ class RateLimiter:
 
         async with self._lock:
             now = time.monotonic()
+            cutoff = now - self._window_seconds
+
+            # Periodic global eviction of stale IPs
+            self._check_count += 1
+            if self._check_count >= self._EVICT_EVERY:
+                self._check_count = 0
+                stale_keys = [
+                    ip for ip, ts_list in self._windows.items()
+                    if not ts_list or ts_list[-1] <= cutoff
+                ]
+                for ip in stale_keys:
+                    del self._windows[ip]
+
             timestamps = self._windows[client_ip]
 
-            # Prune expired entries
-            cutoff = now - self._window_seconds
+            # Prune expired entries for this IP
             timestamps[:] = [t for t in timestamps if t > cutoff]
 
             if len(timestamps) >= self._max_requests:
@@ -65,10 +86,15 @@ class RateLimiter:
 
 
 class DailyQuota:
-    """Per-IP daily request quota. Resets at UTC midnight."""
+    """Per-IP daily request quota. Resets at UTC midnight.
 
-    def __init__(self, max_daily: int):
+    Caps the number of tracked IPs via ``max_tracked_ips`` to prevent memory
+    exhaustion from IP-rotation attacks.
+    """
+
+    def __init__(self, max_daily: int, max_tracked_ips: int = 50_000):
         self._max_daily = max_daily
+        self._max_tracked_ips = max_tracked_ips
         # ip -> (date_str, count)
         self._counts: dict[str, tuple[str, int]] = {}
         self._lock = asyncio.Lock()
@@ -82,6 +108,20 @@ class DailyQuota:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         async with self._lock:
+            # Evict entries from previous days if we're over the cap
+            if len(self._counts) >= self._max_tracked_ips:
+                stale_keys = [
+                    ip for ip, (date_str, _) in self._counts.items()
+                    if date_str != today
+                ]
+                for ip in stale_keys:
+                    del self._counts[ip]
+                # If still over cap after evicting stale, drop oldest entries
+                if len(self._counts) >= self._max_tracked_ips:
+                    excess = len(self._counts) - self._max_tracked_ips + 1
+                    for ip in list(self._counts.keys())[:excess]:
+                        del self._counts[ip]
+
             entry = self._counts.get(client_ip)
             if entry is None or entry[0] != today:
                 # New day or first request — reset
@@ -174,6 +214,13 @@ def _build_degraded_report(
     return report
 
 
+# ---------------------------------------------------------------------------
+# Internal-only endpoints — restricted to loopback
+# ---------------------------------------------------------------------------
+
+_INTERNAL_PATHS: frozenset[str] = frozenset({"/metrics", "/stats"})
+
+
 def create_app(config: Config | None = None, aggregator: Aggregator | None = None) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -187,6 +234,14 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
     cache = TTLCache(ttl_seconds=cfg.cache_ttl_seconds, max_size=cfg.cache_max_size)
     # Store aggregator in a mutable container so lifespan and routes can share it
     state = {"aggregator": aggregator, "total_requests": 0}
+
+    # Circuit breaker state — protects upstream APIs from retry storms
+    cb = {
+        "consecutive_failures": 0,
+        "last_open_time": 0.0,       # monotonic timestamp when breaker opened
+        "threshold": cfg.circuit_breaker_threshold,
+        "cooldown": cfg.circuit_breaker_cooldown,
+    }
 
     # Rate limiters — differentiated for free vs paid (gateway) users
     paid_limiter = RateLimiter(max_requests=cfg.paid_rate_limit, window_seconds=60)
@@ -211,6 +266,35 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
         version="0.1.0",
         lifespan=lifespan,
     )
+
+    # ---- Middleware: Request-ID (outermost — runs first) ----
+
+    @app.middleware("http")
+    async def request_id_middleware(request: Request, call_next):
+        request_id = request.headers.get("x-request-id") or ""
+        # Sanitize: strip CRLF to prevent header injection, cap length
+        request_id = request_id.replace("\r", "").replace("\n", "")
+        if not request_id or len(request_id) > 128:
+            request_id = str(uuid.uuid4())
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+    # ---- Middleware: Internal-only access control ----
+
+    @app.middleware("http")
+    async def internal_access_middleware(request: Request, call_next):
+        path = request.url.path
+        if path in _INTERNAL_PATHS:
+            client_ip = request.client.host if request.client else "unknown"
+            if client_ip not in GATEWAY_IPS:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Endpoint restricted to internal access."},
+                )
+        return await call_next(request)
+
+    # ---- Middleware: Rate limiting ----
 
     @app.middleware("http")
     async def rate_limit_middleware(request: Request, call_next):
@@ -251,6 +335,8 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
 
         return await call_next(request)
 
+    # ---- Middleware: Prometheus metrics ----
+
     @app.middleware("http")
     async def metrics_middleware(request: Request, call_next):
         path = _normalize_path(request.url.path)
@@ -261,6 +347,30 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
         REQUEST_COUNT.labels(method=method, path=path, status=response.status_code).inc()
         REQUEST_DURATION.labels(method=method, path=path).observe(duration)
         return response
+
+    # ---- Circuit breaker helpers ----
+
+    def _cb_is_open() -> bool:
+        """Return True if the circuit breaker is currently open (tripped)."""
+        if cb["consecutive_failures"] < cb["threshold"]:
+            return False
+        # Breaker is tripped — check if cooldown has elapsed
+        elapsed = time.monotonic() - cb["last_open_time"]
+        if elapsed >= cb["cooldown"]:
+            # Allow one probe request (half-open)
+            cb["consecutive_failures"] = 0
+            return False
+        return True
+
+    def _cb_record_failure() -> None:
+        cb["consecutive_failures"] += 1
+        if cb["consecutive_failures"] >= cb["threshold"]:
+            cb["last_open_time"] = time.monotonic()
+
+    def _cb_record_success() -> None:
+        cb["consecutive_failures"] = 0
+
+    # ---- Routes ----
 
     @app.get("/audit/{mint_address}", response_model=AuditReport)
     async def audit(mint_address: str) -> AuditReport:
@@ -276,6 +386,15 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
             cached.metadata.cache_hit = True
             cached.metadata.data_age_seconds = int(data_age)
             return cached
+
+        # Circuit breaker check — if open, return degraded immediately
+        if _cb_is_open():
+            logger.warning("[AUDIT] Circuit breaker OPEN — returning degraded for %s", mint_address[:16])
+            data = AggregatedData(
+                sources_succeeded=[],
+                sources_failed=["RugCheck", "DexScreener", "GoPlus"],
+            )
+            return _build_degraded_report(mint_address, data, elapsed_ms=0)
 
         agg = state["aggregator"]
         if agg is None:
@@ -293,6 +412,7 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
                 sources_failed=["RugCheck", "DexScreener", "GoPlus"],
             )
             _record_upstream_metrics(data)
+            _cb_record_failure()
             report = _build_degraded_report(mint_address, data, elapsed_ms)
             return report
         elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -300,9 +420,11 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
         _record_upstream_metrics(data)
 
         if not data.sources_succeeded:
+            _cb_record_failure()
             report = _build_degraded_report(mint_address, data, elapsed_ms)
             return report
 
+        _cb_record_success()
         report = build_report(mint_address, data, response_time_ms=elapsed_ms)
         report.metadata.data_age_seconds = 0
         logger.info(

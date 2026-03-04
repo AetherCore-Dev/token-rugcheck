@@ -6,6 +6,14 @@ Workaround for ag402 CLI issues:
 
 This script uses the X402Gateway API directly, binds 0.0.0.0,
 and avoids uvloop by running plain asyncio + uvicorn.
+
+Seller (provider) architecture note:
+  The seller does NOT need a private key.  The ag402 gateway issues x402
+  payment challenges containing the seller's *public* receiving address.
+  The *buyer* signs and broadcasts the on-chain payment.  The gateway then
+  verifies the payment proof on-chain (read-only RPC, no private key).
+  When SOLANA_PRIVATE_KEY is absent, the gateway uses ag402's built-in
+  address-based verification (checks tx_hash on-chain via RPC).
 """
 
 from __future__ import annotations
@@ -52,18 +60,13 @@ def main() -> None:
 
     from ag402_mcp import X402Gateway
 
-    # Build a PaymentVerifier with a real provider for production mode.
+    # Build a PaymentVerifier for production mode.
+    # The seller does NOT need a private key — on-chain verification is
+    # read-only (verifies tx_hash via RPC).  SOLANA_PRIVATE_KEY is only
+    # needed if the provider wants to sign messages (not required by x402).
     verifier = None
     x402_mode = os.getenv("X402_MODE", "test").lower()
     if x402_mode == "production":
-        solana_key = os.getenv("SOLANA_PRIVATE_KEY", "")
-        if not solana_key:
-            logger.error(
-                "[GATEWAY] X402_MODE=production but SOLANA_PRIVATE_KEY is not set! "
-                "Cannot start gateway without on-chain verification."
-            )
-            sys.exit(1)
-
         try:
             from ag402_core.config import load_config as load_x402_config
             from ag402_core.gateway.auth import PaymentVerifier

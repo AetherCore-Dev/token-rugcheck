@@ -56,7 +56,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Optional:"
             echo "  --price             USDC per request (default: 0.05)"
-            echo "  --private-key       Solana private key, base58 (required for devnet/production)"
+            echo "  --private-key       Solana private key, base58 (optional, for advanced verification)"
             echo "  --private-key-file  Path to file containing the private key"
             echo "  --rpc-url           Solana RPC URL (auto-derived from mode if omitted)"
             echo "  --output            Output file path (default: .env)"
@@ -100,15 +100,18 @@ if [ -n "$PRIVATE_KEY_FILE" ] && [ -z "$PRIVATE_KEY" ]; then
 fi
 
 # --- Validate private key for non-test modes ---
-if [ "$MODE" != "test" ]; then
-    if [ -z "$PRIVATE_KEY" ]; then
-        bail "VALIDATE" "Mode '$MODE' requires --private-key or --private-key-file"
-    fi
+# NOTE: The private key is OPTIONAL for sellers/providers.  The ag402 gateway
+# verifies payments on-chain via read-only RPC — no signing required.
+# SOLANA_PRIVATE_KEY is only needed if using ag402-core's SolanaAdapter
+# directly (e.g. for buyer-side payments or advanced verification flows).
+if [ "$MODE" != "test" ] && [ -n "$PRIVATE_KEY" ]; then
     # Basic base58 check (private keys are typically 64-88 chars)
     if ! echo "$PRIVATE_KEY" | grep -qP '^[1-9A-HJ-NP-Za-km-z]{44,88}$'; then
         bail "VALIDATE" "Private key does not look like valid base58 (expected 44-88 chars)"
     fi
     log_ok "VALIDATE" "Private key format valid (${#PRIVATE_KEY} chars)"
+elif [ "$MODE" != "test" ] && [ -z "$PRIVATE_KEY" ]; then
+    log_info "VALIDATE" "No private key provided — gateway will use read-only on-chain verification"
 fi
 
 # --- Derive mode-specific values ---
@@ -190,14 +193,22 @@ X402_MODE=$X402_MODE
 X402_NETWORK=$X402_NETWORK
 ENVFILE
 
-# Add Solana keys only for non-test modes
+# Add Solana config for non-test modes
 if [ "$MODE" != "test" ]; then
-    cat >> "$OUTPUT" <<ENVFILE
+    if [ -n "$PRIVATE_KEY" ]; then
+        cat >> "$OUTPUT" <<ENVFILE
 
 # --- Solana Wallet ---
 SOLANA_PRIVATE_KEY=$PRIVATE_KEY
 SOLANA_RPC_URL=$RPC_URL
 ENVFILE
+    elif [ -n "$RPC_URL" ]; then
+        cat >> "$OUTPUT" <<ENVFILE
+
+# --- Solana RPC (read-only verification, no private key) ---
+SOLANA_RPC_URL=$RPC_URL
+ENVFILE
+    fi
 fi
 
 log_ok "GENERATE" "Written to $OUTPUT ($(wc -l < "$OUTPUT") lines)"

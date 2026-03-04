@@ -15,7 +15,7 @@ set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/AetherCore-Dev/token-bugcheck.git}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/token-bugcheck}"
-REQUIRED_PORTS=(22 80 8000)
+REQUIRED_PORTS=(22 80)
 
 # --- Helpers ---
 log_ok()   { echo "OK|$1|$2"; }
@@ -65,6 +65,9 @@ fi
 
 # --- 3. Firewall (ufw) ---
 if command -v ufw &>/dev/null; then
+    # Ensure default deny policy before allowing specific ports
+    ufw default deny incoming &>/dev/null
+    log_ok "FIREWALL" "Set default deny incoming"
     for port in "${REQUIRED_PORTS[@]}"; do
         if ufw status 2>/dev/null | grep -qw "$port"; then
             log_skip "FIREWALL" "Port $port already allowed"
@@ -83,6 +86,7 @@ if command -v ufw &>/dev/null; then
 else
     log_info "FIREWALL" "ufw not found — installing..."
     apt-get update -qq &>/dev/null && apt-get install -y -qq ufw &>/dev/null
+    ufw default deny incoming &>/dev/null
     for port in "${REQUIRED_PORTS[@]}"; do
         ufw allow "$port/tcp" &>/dev/null
     done

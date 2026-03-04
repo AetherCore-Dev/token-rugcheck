@@ -2,7 +2,9 @@ services:
   audit-server:
     build: .
     ports:
-      - "8000:8000"
+      # Bind to loopback only — public access goes through ag402-gateway.
+      # Exposing 8000 publicly would bypass the payment wall.
+      - "127.0.0.1:8000:8000"
     env_file: .env
     restart: unless-stopped
     healthcheck:
@@ -10,6 +12,11 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   ag402-gateway:
     build:
@@ -31,6 +38,11 @@ services:
       audit-server:
         condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
 volumes:
   ag402-data:

@@ -39,11 +39,11 @@ inputs:
 
   conditional:
     - name: private_key
-      description: "Solana private key (base58, 44-88 chars)"
+      description: "Solana private key (base58, 44-88 chars) — optional for sellers"
       type: secret
       validation: '^[1-9A-HJ-NP-Za-km-z]{44,88}$'
-      required_when: "mode in [devnet, production]"
-      note: "Required for on-chain payment verification"
+      required_when: "never — sellers verify payments via read-only RPC"
+      note: "Not required for seller/provider mode. The gateway verifies buyer payments on-chain without signing."
 
     - name: rpc_url
       description: "Solana RPC URL"

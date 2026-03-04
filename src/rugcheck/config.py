@@ -12,6 +12,11 @@ logger = logging.getLogger(__name__)
 _PLACEHOLDER_ADDRESS = "<YOUR_SOLANA_WALLET_ADDRESS>"
 
 
+def _clamp(value: int, lo: int, hi: int) -> int:
+    """Clamp *value* into [lo, hi]."""
+    return max(lo, min(value, hi))
+
+
 @dataclass(frozen=True)
 class Config:
     """Immutable service configuration."""
@@ -49,15 +54,28 @@ class Config:
     free_daily_quota: int = 20
     paid_rate_limit: int = 120
 
+    # Circuit breaker — protects upstream APIs from retry storms.
+    circuit_breaker_threshold: int = 5
+    circuit_breaker_cooldown: int = 30
+
 
 def load_config() -> Config:
-    """Build Config from environment variables with sensible defaults."""
+    """Build Config from environment variables with sensible defaults.
+
+    Values are clamped to safe ranges to prevent misconfiguration:
+      - cache_ttl_seconds: [0, 3600]
+      - cache_max_size: [1, 100_000]
+      - free_daily_quota: [0, 10_000]
+      - paid_rate_limit: [1, 10_000]
+      - circuit_breaker_threshold: [1, 100]
+      - circuit_breaker_cooldown: [1, 3600]
+    """
     cfg = Config(
         host=os.getenv("RUGCHECK_HOST", "0.0.0.0"),
         port=int(os.getenv("RUGCHECK_PORT", "8000")),
         log_level=os.getenv("RUGCHECK_LOG_LEVEL", "info"),
-        cache_ttl_seconds=int(os.getenv("CACHE_TTL_SECONDS", "3")),
-        cache_max_size=int(os.getenv("CACHE_MAX_SIZE", "5000")),
+        cache_ttl_seconds=_clamp(int(os.getenv("CACHE_TTL_SECONDS", "3")), 0, 3600),
+        cache_max_size=_clamp(int(os.getenv("CACHE_MAX_SIZE", "5000")), 1, 100_000),
         goplus_timeout=float(os.getenv("GOPLUS_TIMEOUT_SECONDS", "2.5")),
         rugcheck_timeout=float(os.getenv("RUGCHECK_API_TIMEOUT_SECONDS", "3.5")),
         dexscreener_timeout=float(os.getenv("DEXSCREENER_TIMEOUT_SECONDS", "1.5")),
@@ -69,8 +87,14 @@ def load_config() -> Config:
         ag402_token=os.getenv("AG402_TOKEN", "USDC"),
         ag402_network=os.getenv("X402_NETWORK", "devnet"),
         ag402_gateway_port=int(os.getenv("AG402_GATEWAY_PORT", "8001")),
-        free_daily_quota=int(os.getenv("FREE_DAILY_QUOTA", "20")),
-        paid_rate_limit=int(os.getenv("PAID_RATE_LIMIT", "120")),
+        free_daily_quota=_clamp(int(os.getenv("FREE_DAILY_QUOTA", "20")), 0, 10_000),
+        paid_rate_limit=_clamp(int(os.getenv("PAID_RATE_LIMIT", "120")), 1, 10_000),
+        circuit_breaker_threshold=_clamp(
+            int(os.getenv("CIRCUIT_BREAKER_THRESHOLD", "5")), 1, 100,
+        ),
+        circuit_breaker_cooldown=_clamp(
+            int(os.getenv("CIRCUIT_BREAKER_COOLDOWN", "30")), 1, 3600,
+        ),
     )
 
     if cfg.ag402_address == _PLACEHOLDER_ADDRESS:
