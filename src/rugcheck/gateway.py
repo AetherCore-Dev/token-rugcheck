@@ -80,9 +80,21 @@ def main() -> None:
             sys.exit(1)
 
         x402_cfg = load_x402_config()
-        provider = PaymentProviderRegistry.get_provider(config=x402_cfg)
-        verifier = PaymentVerifier(provider=provider, config=x402_cfg)
-        logger.info("[GATEWAY] Production mode: on-chain payment verification enabled")
+        try:
+            provider = PaymentProviderRegistry.get_provider(config=x402_cfg)
+            verifier = PaymentVerifier(provider=provider, config=x402_cfg)
+            logger.info("[GATEWAY] Production mode: on-chain payment verification enabled")
+        except Exception as exc:
+            # Seller doesn't need a private key — the gateway issues 402
+            # challenges with the public address; the buyer pays on-chain.
+            # Without a provider we skip server-side verification but the
+            # 402 paywall still works.
+            logger.warning(
+                "[GATEWAY] Could not initialise payment provider (%s). "
+                "Running WITHOUT on-chain verification — 402 paywall is "
+                "still active but payments are not verified server-side.",
+                exc,
+            )
 
     gw = X402Gateway(
         target_url=target_url,
