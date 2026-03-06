@@ -76,10 +76,15 @@ done
 [[ -z "$ADDRESS" ]]   && { fail "Missing --address"; exit 1; }
 [[ -z "$DOMAIN" ]]    && { fail "Missing --domain"; exit 1; }
 
-# Results tracking
-declare -A RESULTS
+# Results tracking (bash 3.x compatible - use temp file instead of associative array)
+RESULTS_FILE=$(mktemp /tmp/deploy-results.XXXXXX)
+trap 'rm -f "$RESULTS_FILE"' EXIT
 TOTAL_PASS=0
 TOTAL_FAIL=0
+
+# Helper: store/retrieve results
+set_result() { echo "$1=$2" >> "$RESULTS_FILE"; }
+get_result() { grep "^$1=" "$RESULTS_FILE" 2>/dev/null | tail -1 | cut -d= -f2-; }
 
 # --- Helper: remote exec ---
 remote() {
@@ -269,7 +274,7 @@ run_verify() {
 
     echo ""
     info "=== $mode mode: $pass passed, $fail_count failed ==="
-    RESULTS["$mode"]="pass=$pass fail=$fail_count"
+    set_result "$mode" "pass=$pass fail=$fail_count"
     TOTAL_PASS=$((TOTAL_PASS + pass))
     TOTAL_FAIL=$((TOTAL_FAIL + fail_count))
     return "$fail_count"
@@ -358,7 +363,7 @@ for mode in "${MODE_LIST[@]}"; do
 
     # Step 1: Generate and upload .env
     if ! gen_and_upload_env "$mode"; then
-        RESULTS["$mode"]="SKIPPED (env generation failed)"
+        set_result "$mode" "SKIPPED (env generation failed)"
         continue
     fi
 
@@ -381,7 +386,7 @@ for mode in "${MODE_LIST[@]}"; do
         # Dump logs for debugging
         warn "Last 20 lines of gateway logs:"
         remote "cd $PROJECT_DIR && docker compose logs ag402-gateway --tail 20" 2>&1 || true
-        RESULTS["$mode"]="FAILED (services unhealthy)"
+        set_result "$mode" "FAILED (services unhealthy)"
         TOTAL_FAIL=$((TOTAL_FAIL + 1))
         continue
     fi
@@ -402,7 +407,8 @@ echo "╔═══════════════════════�
 echo "║         DEPLOYMENT VERIFICATION SUMMARY             ║"
 echo "╠══════════════════════════════════════════════════════╣"
 for mode in "${MODE_LIST[@]}"; do
-    result="${RESULTS[$mode]:-NOT_RUN}"
+    result=$(get_result "$mode")
+    [ -z "$result" ] && result="NOT_RUN"
     if echo "$result" | grep -q "fail=0"; then
         printf "║  %-10s: %-39s ║\n" "$mode" "✅ $result"
     else
