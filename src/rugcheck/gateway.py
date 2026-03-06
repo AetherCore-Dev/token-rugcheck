@@ -87,14 +87,19 @@ def main() -> None:
         except Exception as exc:
             # Seller doesn't need a private key — the gateway issues 402
             # challenges with the public address; the buyer pays on-chain.
-            # Without a provider we skip server-side verification but the
-            # 402 paywall still works.
+            # Without SOLANA_PRIVATE_KEY, use mock provider so the gateway
+            # can still start and serve 402 challenges.  The X402Gateway
+            # requires a non-None verifier in production mode, so we fall
+            # back to mock adapter + force X402_MODE=test internally.
             logger.warning(
-                "[GATEWAY] Could not initialise payment provider (%s). "
-                "Running WITHOUT on-chain verification — 402 paywall is "
-                "still active but payments are not verified server-side.",
+                "[GATEWAY] No SOLANA_PRIVATE_KEY — falling back to mock "
+                "payment verification (%s). 402 paywall is active; "
+                "on-chain verification is DISABLED.",
                 exc,
             )
+            os.environ["X402_MODE"] = "test"
+            mock_provider = PaymentProviderRegistry.get_provider(name="mock")
+            verifier = PaymentVerifier(provider=mock_provider, config=x402_cfg)
 
     gw = X402Gateway(
         target_url=target_url,
