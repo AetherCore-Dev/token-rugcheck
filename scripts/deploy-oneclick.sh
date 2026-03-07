@@ -41,7 +41,7 @@ bail()    { fail "$1"; exit 1; }
 # --- Script dir ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PROJECT_DIR="/opt/token-bugcheck"
+PROJECT_DIR="/opt/token-rugcheck"
 COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
 
 # --- Remote exec helper ---
@@ -201,7 +201,7 @@ else
         "  docker --version" \
         "  docker compose version" \
         "  # 检查代码目录" \
-        "  ls -la /opt/token-bugcheck/" \
+        "  ls -la /opt/token-rugcheck/" \
         "" \
         "修复后重新运行本脚本。"
     exit 1
@@ -212,7 +212,7 @@ fi
 # =============================================================================
 step "4/8" "生成 .env 配置"
 
-ENV_FILE="/tmp/token-bugcheck-$(date +%s).env"
+ENV_FILE="/tmp/token-rugcheck-$(date +%s).env"
 
 # Build generate-env.sh args
 GEN_ARGS=(
@@ -269,7 +269,7 @@ else
     human \
         "请 SSH 登录服务器查看构建日志:" \
         "  ssh root@${SERVER_IP}" \
-        "  cd /opt/token-bugcheck" \
+        "  cd /opt/token-rugcheck" \
         "  docker compose $COMPOSE_FILES build --no-cache 2>&1 | tail -50" \
         "" \
         "常见原因:" \
@@ -330,7 +330,7 @@ if [ "$AUDIT_OK" = false ] || [ "$GW_OK" = false ]; then
     human \
         "请 SSH 登录服务器排查:" \
         "  ssh root@${SERVER_IP}" \
-        "  cd /opt/token-bugcheck" \
+        "  cd /opt/token-rugcheck" \
         "  docker compose logs --tail 50" \
         "" \
         "常见原因:" \
@@ -549,7 +549,7 @@ if [ "$MODE" = "production" ]; then
     printf "    1. 确保卖家钱包 (%s) 有 USDC 的 ATA\n" "${WALLET_ADDRESS:0:12}..."
     printf "       (至少收到过一次 USDC 或 swap 过 USDC)\n"
     printf "    2. 建议配置 UptimeRobot 监控: https://%s/health\n" "${DOMAIN:-$SERVER_IP:80}"
-    printf "    3. 定期检查日志: ssh root@%s 'cd /opt/token-bugcheck && docker compose logs --tail 50'\n" "$SERVER_IP"
+    printf "    3. 定期检查日志: ssh root@%s 'cd /opt/token-rugcheck && docker compose logs --tail 50'\n" "$SERVER_IP"
     printf "\n"
 fi
 

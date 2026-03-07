@@ -13,8 +13,8 @@
 # =============================================================================
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/AetherCore-Dev/token-bugcheck.git}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/token-bugcheck}"
+REPO_URL="${REPO_URL:-https://github.com/AetherCore-Dev/token-rugcheck.git}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/token-rugcheck}"
 REQUIRED_PORTS=(22 80)
 
 # --- Helpers ---

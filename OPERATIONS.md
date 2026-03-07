@@ -75,8 +75,8 @@ bash scripts/generate-env.sh \
   --output .env.production
 
 # 3. 上传 .env 并部署
-scp .env.production root@<IP>:/opt/token-bugcheck/.env
-ssh root@<IP> "cd /opt/token-bugcheck && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build"
+scp .env.production root@<IP>:/opt/token-rugcheck/.env
+ssh root@<IP> "cd /opt/token-rugcheck && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build"
 
 # 4. 验证
 bash scripts/verify.sh --server-ip <IP> --domain <domain>
@@ -120,7 +120,7 @@ bash scripts/backup-data.sh --keep 7
 BACKUP_REMOTE_HOST=backup-server bash scripts/backup-data.sh --remote scp
 
 # 定时备份（crontab）
-0 3 * * * cd /opt/token-bugcheck && bash scripts/backup-data.sh >> /var/log/rugcheck-backup.log 2>&1
+0 3 * * * cd /opt/token-rugcheck && bash scripts/backup-data.sh >> /var/log/rugcheck-backup.log 2>&1
 ```
 
 ---
@@ -130,7 +130,7 @@ BACKUP_REMOTE_HOST=backup-server bash scripts/backup-data.sh --remote scp
 ```bash
 # SSH 到服务器
 ssh root@<IP>
-cd /opt/token-bugcheck
+cd /opt/token-rugcheck
 
 # 查看状态
 docker compose ps
@@ -248,7 +248,7 @@ docker system prune -f
 | 事项 | 说明 |
 |------|------|
 | 旋转 devnet 私钥 | 旧私钥曾在 Git 历史中，建议生成新密钥对 |
-| 配置 crontab 定时备份 | `0 3 * * * cd /opt/token-bugcheck && bash scripts/backup-data.sh` |
+| 配置 crontab 定时备份 | `0 3 * * * cd /opt/token-rugcheck && bash scripts/backup-data.sh` |
 | 部署 UptimeRobot | 监控 `https://<domain>/health` |
 
 ---

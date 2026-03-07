@@ -43,7 +43,7 @@ step()    { printf "\n${BOLD}${CYAN}━━━ Step %s: %s ━━━${NC}\n\n" "$
 # --- Args ---
 SERVER_IP="${1:-}"
 DOMAIN="${2:-}"
-PROJECT_DIR="/opt/token-bugcheck"
+PROJECT_DIR="/opt/token-rugcheck"
 COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
 
 if [[ -z "$SERVER_IP" ]]; then
