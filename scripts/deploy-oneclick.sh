@@ -284,51 +284,67 @@ remote "docker ps -a --filter 'name=token-rugcheck' -q | xargs -r docker rm -f" 
 info "清理 Docker 网络和端口残留..."
 remote "pkill -9 -f docker-proxy 2>/dev/null" 2>/dev/null || true
 remote "docker network prune -f 2>/dev/null" 2>/dev/null || true
+sleep 2
 
-# 等待关键端口真正释放（同时检测 OS 层面和 Docker 层面）
+# 检查端口是否已释放，未释放则重启 Docker daemon（一次性）
+NEED_DOCKER_RESTART=false
 for PORT in 80 8000; do
-    WAIT=0
-    MAX_PORT_WAIT=30
-    while true; do
-        # 检查 OS 层面（ss）— 覆盖所有地址格式（0.0.0.0:PORT, 127.0.0.1:PORT, *:PORT）
-        OS_BUSY=$(remote "ss -tlnp 2>/dev/null | grep -E ':${PORT}\b' | head -1" 2>/dev/null) || OS_BUSY=""
-        # 检查 Docker 层面 — docker-proxy 是否仍在运行占用该端口
-        DOCKER_BUSY=$(remote "pgrep -f 'docker-proxy.*:${PORT}\b' 2>/dev/null" 2>/dev/null) || DOCKER_BUSY=""
-
-        if [ -z "$OS_BUSY" ] && [ -z "$DOCKER_BUSY" ]; then
-            break
-        fi
-
-        if [ "$WAIT" -eq 0 ]; then
-            warn "端口 ${PORT} 仍被占用，强制释放..."
-            # 杀 OS 层面的占用进程
-            if [ -n "$OS_BUSY" ]; then
-                PIDS=$(remote "ss -tlnp 2>/dev/null | grep -E ':${PORT}\b' | grep -oP 'pid=\K[0-9]+' | sort -u" 2>/dev/null) || PIDS=""
-                for P in $PIDS; do
-                    remote "kill -9 $P" 2>/dev/null || true
-                done
-            fi
-            # 杀 Docker 层面的 docker-proxy
-            if [ -n "$DOCKER_BUSY" ]; then
-                remote "pkill -9 -f 'docker-proxy.*:${PORT}\b'" 2>/dev/null || true
-            fi
-        fi
-
-        WAIT=$((WAIT + 2))
-        if [ "$WAIT" -ge "$MAX_PORT_WAIT" ]; then
-            warn "端口 ${PORT} 在 ${MAX_PORT_WAIT}s 内未能释放，尝试重启 Docker daemon..."
-            remote "systemctl restart docker" 2>/dev/null || true
-            sleep 5
-            break
-        fi
-        sleep 2
-        printf "  ⏳ 等待端口 %s 释放... %ds\r" "$PORT" "$WAIT"
-    done
-    if [ "$WAIT" -gt 0 ]; then
-        printf "\n"
-        ok "端口 ${PORT} 已释放 (${WAIT}s)"
+    OS_BUSY=$(remote "ss -tlnp 2>/dev/null | grep -E ':${PORT}\b'" 2>/dev/null) || OS_BUSY=""
+    DOCKER_BUSY=$(remote "pgrep -f 'docker-proxy.*:${PORT}' 2>/dev/null" 2>/dev/null) || DOCKER_BUSY=""
+    if [ -n "$OS_BUSY" ] || [ -n "$DOCKER_BUSY" ]; then
+        warn "端口 ${PORT} 仍被占用，标记需要重启 Docker daemon"
+        NEED_DOCKER_RESTART=true
     fi
 done
+
+if [ "$NEED_DOCKER_RESTART" = true ]; then
+    warn "端口未能通过 kill 释放，重启 Docker daemon..."
+    # 使用 nohup 在服务器后台重启 Docker，避免 SSH 连接被中断
+    remote "nohup bash -c 'systemctl restart docker' >/dev/null 2>&1 &" 2>/dev/null || true
+    info "等待 Docker daemon 重启和 SSH 恢复..."
+    sleep 10
+
+    # 等待 SSH 恢复连通
+    SSH_WAIT=0
+    SSH_MAX=60
+    while [ "$SSH_WAIT" -lt "$SSH_MAX" ]; do
+        if remote "echo SSH_OK" 2>/dev/null | grep -q "SSH_OK"; then
+            break
+        fi
+        SSH_WAIT=$((SSH_WAIT + 3))
+        sleep 3
+        printf "  ⏳ 等待 SSH 恢复... %ds\r" "$SSH_WAIT"
+    done
+    printf "\n"
+
+    if [ "$SSH_WAIT" -ge "$SSH_MAX" ]; then
+        fail "Docker 重启后 SSH 连接未恢复 (${SSH_MAX}s)"
+        human "请手动 SSH 登录检查: ssh root@${SERVER_IP}"
+        exit 1
+    fi
+    ok "Docker daemon 已重启，SSH 已恢复 (${SSH_WAIT}s)"
+
+    # 等待 Docker daemon 完全就绪
+    DOCKER_WAIT=0
+    while [ "$DOCKER_WAIT" -lt 30 ]; do
+        if remote "docker info >/dev/null 2>&1"; then
+            break
+        fi
+        DOCKER_WAIT=$((DOCKER_WAIT + 2))
+        sleep 2
+    done
+    ok "Docker daemon 就绪"
+fi
+
+# 最终确认端口已释放
+for PORT in 80 8000; do
+    if remote "ss -tlnp 2>/dev/null | grep -qE ':${PORT}\b'" 2>/dev/null; then
+        fail "端口 ${PORT} 仍被占用（即使重启 Docker 后）"
+        human "请手动排查: ssh root@${SERVER_IP} 'ss -tlnp | grep :${PORT}'"
+        exit 1
+    fi
+done
+ok "所有端口已释放"
 
 info "构建 Docker 镜像 + 更新 ag402 依赖 (首次约 2-3 分钟)..."
 BUILD_START=$(date +%s)
