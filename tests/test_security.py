@@ -466,14 +466,20 @@ def test_setup_server_default_deny():
 
 
 def test_gateway_production_crashes_without_verifier():
-    """In X402_MODE=production, if PaymentVerifier cannot be initialized,
-    the gateway MUST raise SystemExit instead of silently falling back to mock."""
+    """In X402_MODE=production, if PaymentVerifier cannot be initialized
+    (e.g. crypto deps missing), the gateway MUST raise SystemExit instead
+    of silently falling back to mock.
+
+    Note: Since the gateway now uses a throwaway keypair (no real
+    SOLANA_PRIVATE_KEY needed), we simulate failure by mocking the
+    crypto import to raise ImportError.
+    """
     import importlib
     import os
+    from unittest import mock
 
     # Save original env
     original_mode = os.environ.get("X402_MODE")
-    original_key = os.environ.get("SOLANA_PRIVATE_KEY")
     original_net = os.environ.get("X402_NETWORK")
     original_addr = os.environ.get("AG402_ADDRESS")
 
@@ -481,19 +487,20 @@ def test_gateway_production_crashes_without_verifier():
         os.environ["X402_MODE"] = "production"
         os.environ["X402_NETWORK"] = "mainnet"
         os.environ["AG402_ADDRESS"] = "EtfTwndhRFLaWUe64ZbCBBdXBqfaK9H6QqCAeSnNXLLK"
-        # Remove private key to force verifier init failure
         os.environ.pop("SOLANA_PRIVATE_KEY", None)
 
         import pytest
-        with pytest.raises(SystemExit):
-            from rugcheck import gateway
-            importlib.reload(gateway)
-            gateway.main()
+
+        # Simulate missing crypto dependencies by making the import fail
+        with mock.patch.dict("sys.modules", {"ag402_core.config": None}):
+            with pytest.raises(SystemExit):
+                from rugcheck import gateway
+                importlib.reload(gateway)
+                gateway.main()
     finally:
         # Restore env
         for key, val in [
             ("X402_MODE", original_mode),
-            ("SOLANA_PRIVATE_KEY", original_key),
             ("X402_NETWORK", original_net),
             ("AG402_ADDRESS", original_addr),
         ]:
