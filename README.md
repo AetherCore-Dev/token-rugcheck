@@ -20,19 +20,19 @@ Powered by [ag402](https://github.com/AetherCore-Dev/ag402) on-chain micropaymen
 
 ## Live Demos (Mainnet)
 
-> All demos below are **real mainnet transactions** — left side is the client, right side is the production server logs. Click any thumbnail to play.
+> All demos below are **real mainnet transactions** — left side is the client, right side is the production server logs.
 
 **1. Wallet Setup** (`ag402 setup`)
 
-[![Wallet Setup Demo](assets/setup_cover.jpg)](assets/setup_github.mp4)
+https://github.com/user-attachments/assets/fb6b1ecb-8d42-43b7-9939-4751ca09b63f
 
 **2. Auditing a Safe Token** (BONK — risk score 3, SAFE)
 
-[![Safe Token Demo](assets/safe_cover.jpg)](assets/safe_github.mp4)
+https://github.com/user-attachments/assets/4b3814ae-96af-496b-86b7-c80cddef1475
 
 **3. Auditing a Risky Token** (TRUMP — risk score 60, HIGH)
 
-[![Risky Token Demo](assets/risk_cover.jpg)](assets/risk_github.mp4)
+https://github.com/user-attachments/assets/6e359374-8caf-41c7-8bd1-14f63eb6d6e8
 
 ---
 
