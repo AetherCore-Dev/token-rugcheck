@@ -175,16 +175,16 @@ fi
 step "3/8" "服务器初始化 (Docker, 防火墙, 代码)"
 
 info "运行服务器初始化脚本..."
-SETUP_OUTPUT=$(remote 'bash -s' < "$SCRIPT_DIR/setup-server.sh" 2>&1)
-SETUP_EXIT=$?
+SETUP_EXIT=0
+SETUP_OUTPUT=$(remote 'bash -s' < "$SCRIPT_DIR/setup-server.sh" 2>&1) || SETUP_EXIT=$?
 
 echo "$SETUP_OUTPUT" | while IFS= read -r line; do
     case "$line" in
-        OK|*) printf "  ${GREEN}✓${NC} %s\n" "$line" ;;
-        FAIL|*) printf "  ${RED}✗${NC} %s\n" "$line" ;;
-        SKIP|*) printf "  ${YELLOW}→${NC} %s\n" "$line" ;;
-        INFO|*) printf "  ${BLUE}ℹ${NC} %s\n" "$line" ;;
-        *) printf "  %s\n" "$line" ;;
+        OK\|*)   printf "  ${GREEN}✓${NC} %s\n" "$line" ;;
+        FAIL\|*) printf "  ${RED}✗${NC} %s\n" "$line" ;;
+        SKIP\|*) printf "  ${YELLOW}→${NC} %s\n" "$line" ;;
+        INFO\|*) printf "  ${BLUE}ℹ${NC} %s\n" "$line" ;;
+        *)       printf "  %s\n" "$line" ;;
     esac
 done
 
@@ -274,18 +274,59 @@ fi
 info "停止旧服务..."
 remote "cd $PROJECT_DIR && docker compose $COMPOSE_FILES down --remove-orphans --timeout 30" 2>&1 || true
 
-# 强制清理残留容器和端口占用
+# 强制清理残留容器
 info "清理残留容器..."
 remote "docker ps -a --filter 'name=token-rugcheck' -q | xargs -r docker rm -f" 2>&1 || true
-# 检查关键端口是否释放
+
+# 清理残留的 docker-proxy 进程和 Docker 网络
+# docker compose down 后 docker-proxy 可能残留，导致 Docker daemon 认为端口仍被占用
+# 即使 ss -tlnp 看不到监听，Docker 内部状态也可能不一致
+info "清理 Docker 网络和端口残留..."
+remote "pkill -9 -f docker-proxy 2>/dev/null" 2>/dev/null || true
+remote "docker network prune -f 2>/dev/null" 2>/dev/null || true
+
+# 等待关键端口真正释放（同时检测 OS 层面和 Docker 层面）
 for PORT in 80 8000; do
-    if remote "ss -tlnp 2>/dev/null | grep -q ':${PORT} '" 2>/dev/null; then
-        PID=$(remote "ss -tlnp 2>/dev/null | grep ':${PORT} ' | grep -oP 'pid=\K[0-9]+' | head -1" 2>/dev/null) || PID=""
-        if [ -n "$PID" ]; then
-            warn "端口 ${PORT} 仍被占用 (PID=$PID)，尝试强制释放..."
-            remote "kill -9 $PID" 2>/dev/null || true
-            sleep 2
+    WAIT=0
+    MAX_PORT_WAIT=30
+    while true; do
+        # 检查 OS 层面（ss）— 覆盖所有地址格式（0.0.0.0:PORT, 127.0.0.1:PORT, *:PORT）
+        OS_BUSY=$(remote "ss -tlnp 2>/dev/null | grep -E ':${PORT}\b' | head -1" 2>/dev/null) || OS_BUSY=""
+        # 检查 Docker 层面 — docker-proxy 是否仍在运行占用该端口
+        DOCKER_BUSY=$(remote "pgrep -f 'docker-proxy.*:${PORT}\b' 2>/dev/null" 2>/dev/null) || DOCKER_BUSY=""
+
+        if [ -z "$OS_BUSY" ] && [ -z "$DOCKER_BUSY" ]; then
+            break
         fi
+
+        if [ "$WAIT" -eq 0 ]; then
+            warn "端口 ${PORT} 仍被占用，强制释放..."
+            # 杀 OS 层面的占用进程
+            if [ -n "$OS_BUSY" ]; then
+                PIDS=$(remote "ss -tlnp 2>/dev/null | grep -E ':${PORT}\b' | grep -oP 'pid=\K[0-9]+' | sort -u" 2>/dev/null) || PIDS=""
+                for P in $PIDS; do
+                    remote "kill -9 $P" 2>/dev/null || true
+                done
+            fi
+            # 杀 Docker 层面的 docker-proxy
+            if [ -n "$DOCKER_BUSY" ]; then
+                remote "pkill -9 -f 'docker-proxy.*:${PORT}\b'" 2>/dev/null || true
+            fi
+        fi
+
+        WAIT=$((WAIT + 2))
+        if [ "$WAIT" -ge "$MAX_PORT_WAIT" ]; then
+            warn "端口 ${PORT} 在 ${MAX_PORT_WAIT}s 内未能释放，尝试重启 Docker daemon..."
+            remote "systemctl restart docker" 2>/dev/null || true
+            sleep 5
+            break
+        fi
+        sleep 2
+        printf "  ⏳ 等待端口 %s 释放... %ds\r" "$PORT" "$WAIT"
+    done
+    if [ "$WAIT" -gt 0 ]; then
+        printf "\n"
+        ok "端口 ${PORT} 已释放 (${WAIT}s)"
     fi
 done
 
