@@ -161,6 +161,8 @@ cat > "$OUTPUT" <<ENVFILE
 RUGCHECK_HOST=0.0.0.0
 RUGCHECK_PORT=8000
 RUGCHECK_LOG_LEVEL=$LOG_LEVEL
+RUGCHECK_PRODUCTION=$([ "$MODE" = "production" ] && echo "true" || echo "false")
+UVLOOP_INSTALL=0
 
 # --- Cache ---
 CACHE_TTL_SECONDS=3
@@ -187,6 +189,12 @@ AG402_ADDRESS=$ADDRESS
 AG402_GATEWAY_PORT=8001
 AG402_GATEWAY_HOST=0.0.0.0
 AG402_TARGET_URL=http://localhost:8000
+
+# --- ag402 Prepaid (optional) ---
+# Set a strong random key to enable prepaid fast-path (~1ms vs ~500ms per request).
+# Generate: python -c "import secrets; print(secrets.token_hex(32))"
+# Leave blank to disable prepaid (on-chain payment only).
+AG402_PREPAID_SIGNING_KEY=
 
 # --- ag402 Mode ---
 X402_MODE=$X402_MODE

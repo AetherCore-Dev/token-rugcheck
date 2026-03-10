@@ -433,12 +433,12 @@ curl -s http://localhost:8000/health
 | `X402_NETWORK` | ✅ | Solana 网络 | `devnet` / `mainnet` / `mock` |
 | `AG402_ADDRESS` | ✅ | 收款 Solana 地址 | `YourSo1ana...` |
 | `AG402_PRICE` | ✅ | 单次审计价格 (USDC) | `0.02` |
-| `SOLANA_RPC_URL` | 生产强烈推荐 | Solana RPC 节点。**默认公共节点有速率限制，高并发时支付验证会超时**；生产建议使用私有节点（Helius 免费层即可） | `https://mainnet.helius-rpc.com/?api-key=xxx` |
-| `SOLANA_PRIVATE_KEY` | 买方测试用 | 私钥（绝勿提交 Git） | — |
-| `RUGCHECK_PRODUCTION` | 生产推荐 | 禁用 /docs /redoc | `true` / `false` |
+| `AG402_PREPAID_SIGNING_KEY` | 可选 | 预付费凭证 HMAC 签名密钥。设置后启用 prepaid fast-path（每次请求 ~1ms 本地验证，替代 ~500ms 链上验证）。留空则禁用 prepaid。生成：`python -c "import secrets; print(secrets.token_hex(32))"` | — |
+| `SOLANA_RPC_URL` | 生产强烈推荐 | Solana RPC 节点（只读，用于支付验证）。**默认公共节点有速率限制，高并发时支付验证会超时**；生产建议使用私有节点（Helius 免费层即可） | `https://mainnet.helius-rpc.com/?api-key=xxx` |
+| `RUGCHECK_PRODUCTION` | 生产推荐 | 禁用 /docs /redoc，production /health 只返回 `{"status": ...}` | `true` / `false` |
+| `UVLOOP_INSTALL` | ✅ | 必须设为 0（防止 uvloop/aiosqlite 冲突导致 gateway 崩溃） | `0` |
 | `UVICORN_WORKERS` | 可选 | worker 进程数 | `1`（默认） |
 | `UVICORN_LIMIT_CONCURRENCY` | 可选 | 最大并发连接数 | `0`（无限制） |
-| `UVLOOP_INSTALL` | ✅ | 必须设为 0 | `0` |
 | `GOPLUS_APP_KEY` | 可选 | GoPlus API key | — |
 | `GOPLUS_APP_SECRET` | 可选 | GoPlus API secret | — |
 
@@ -521,6 +521,23 @@ curl -s http://localhost:8000/health
 | D6 | **setup-server.sh 加入职责注释** | `setup-server.sh` | 📖 文档 | 说明 `setup-server.sh` 始终拉取 main HEAD（初始化路径），与 tag 锁定的 `quick-update.sh` 职责边界明确 |
 | D7 | **.gitignore 新增 .deploy_history** | `.gitignore` | 🔒 安全 | 部署历史（含 commit hash 记录）加入忽略列表，防止运维日志意外提交到公开仓库 |
 
+### v0.1.6 预付费激活 + 安全加固 (2026-03)
+
+激活 ag402 prepaid 预付费功能，修复两个阻塞上线的部署坑，收紧 production 信息泄露：
+
+| # | 修改内容 | 文件 | 类型 | 说明 |
+|---|----------|------|------|------|
+| F8 | **激活 prepaid 预付费快速通道** | `config.py`, `gateway.py`, `.env.example`, `docker-compose.yml` | 🔧 功能 | 新增 `AG402_PREPAID_SIGNING_KEY` 配置项并传入 `X402Gateway`。设置后启用 prepaid fast-path：买家预购套餐后每次请求走本地 HMAC 验证（~1ms），替代链上验证（~500ms）。默认留空=关闭，兼容现有部署 |
+| S14 | **production /health 最小化响应** | `server.py` | 🔴 安全 | `RUGCHECK_PRODUCTION=true` 时 `/health` 只返回 `{"status": ...}`，不再暴露版本号、服务名和 upstream 时序信息 |
+| S15 | **修复 docker-compose environment 覆盖 .env** | `docker-compose.yml` | 🔴 安全 | 移除 `environment` 中的 `AG402_PREPAID_SIGNING_KEY=${...}` 展开语法——此语法从宿主机 shell 读取变量，优先级高于 `env_file`，导致 `.env` 里的值被空字符串覆盖，prepaid 永远失效。改为只通过 `env_file: .env` 读取 |
+| S16 | **修复 generate-env.sh 缺少关键变量** | `scripts/generate-env.sh` | 🔴 安全/运维 | 生成的 `.env` 补入 `UVLOOP_INSTALL=0`（缺失会导致 gateway 崩溃）、`RUGCHECK_PRODUCTION`（生产环境应开启 hardening）、`AG402_PREPAID_SIGNING_KEY`（提示可选配置） |
+| D12 | **更新依赖最低版本** | `pyproject.toml` | 🔧 依赖 | `ag402-mcp` / `ag402-core` 最低版本从 `>=0.1.11` 升至 `>=0.1.15`，确保 `prepaid_signing_key` 参数可用 |
+| D13 | **修正文档错误** | `README.md`, `OPERATIONS.md` | 📖 文档 | 修正 Provider `.env` 示例（卖家不需要 `SOLANA_PRIVATE_KEY`）；修正 `/health` 响应格式说明；补充 `AG402_PREPAID_SIGNING_KEY` 配置参考；更新 ag402 CLI prepaid 命令 |
+
+**新增测试**：`test_health_production_minimal` — 验证 production 模式 `/health` 严格只返回 `{"status": ...}` 不含任何额外字段
+
+---
+
 ### v0.1.5 文档修正与上线前风险提示 (2026-03)
 
 修正文档错误，补充上线前必知的三项风险：
@@ -547,7 +564,7 @@ curl -s http://localhost:8000/health
 | A5 | 无收入报表 API | 🟢 低 | 解析日志 |
 | A6 | Solana 主网交易确认超时导致 403 | 🟡 中 | 网络瞬时问题，重试即可；网关返回 `Payment not confirmed on-chain` |
 | A7 | `ag402 run` 不自动解密 `wallet.key` | 🟡 中 | `mainnet_buyer_test.py` 已自行实现多源私钥加载（F2/F3） |
-| A8 | ag402 依赖未锁定版本，`--no-cache` 构建每次拉最新 | 🟡 中 | 上游发布破坏性变更时会导致构建失败或行为异常；如遇异常可在 Dockerfile 中临时锁定版本（如 `ag402-mcp==x.y.z`）后回滚 |
+| A8 | ~~ag402 依赖未锁定版本~~ | ✅ 已修复 | `pyproject.toml` 最低版本已锁定为 `>=0.1.15`，包含 prepaid 功能及多项安全修复。`--no-cache` 构建仍拉最新版（>=0.1.15），但不会再拉到缺少 prepaid 支持的旧版本 |
 
 ### 需要人工处理的一次性事项
 

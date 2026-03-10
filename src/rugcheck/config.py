@@ -55,6 +55,7 @@ class Config:
     ag402_token: str = "USDC"
     ag402_network: str = "devnet"
     ag402_gateway_port: int = 8001
+    ag402_prepaid_signing_key: str = ""
 
     # Rate limiting
     free_daily_quota: int = 20
@@ -94,6 +95,7 @@ def load_config() -> Config:
         ag402_token=os.getenv("AG402_TOKEN", "USDC"),
         ag402_network=os.getenv("X402_NETWORK", "devnet"),
         ag402_gateway_port=int(os.getenv("AG402_GATEWAY_PORT", "8001")),
+        ag402_prepaid_signing_key=os.getenv("AG402_PREPAID_SIGNING_KEY", ""),
         free_daily_quota=_clamp(int(os.getenv("FREE_DAILY_QUOTA", "20")), 0, 10_000),
         paid_rate_limit=_clamp(int(os.getenv("PAID_RATE_LIMIT", "120")), 1, 10_000),
         circuit_breaker_threshold=_clamp(

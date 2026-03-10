@@ -302,6 +302,20 @@ async def test_health_ok_with_recent_success():
     assert resp.json()["status"] == "ok"
 
 
+async def test_health_production_minimal():
+    """Production mode /health must not expose version, service name, or timing."""
+    prod_config = Config(production=True)
+    agg = FakeAggregator(_safe_data())
+    agg.last_success_time = time.monotonic() - 10
+
+    app = create_app(prod_config, aggregator=agg)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/health")
+    body = resp.json()
+    assert resp.status_code == 200
+    assert body == {"status": "ok"}, f"Production /health leaked fields: {list(body.keys())}"
+
+
 # ---------------------------------------------------------------------------
 # data_age_seconds tests
 # ---------------------------------------------------------------------------

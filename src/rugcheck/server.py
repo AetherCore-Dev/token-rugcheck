@@ -611,15 +611,17 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
                     ):
                         status = "degraded"
 
-        result = {
+        if cfg.production:
+            # Production: minimal response — don't expose version or internal timing.
+            return {"status": status}
+
+        result: dict = {
             "status": status,
             "service": "token-rugcheck-mcp",
             "version": __version__,
         }
-
         if agg is not None and agg.last_success_time is not None:
             result["last_upstream_success_secs_ago"] = int(time.monotonic() - agg.last_success_time)
-
         return result
 
     @app.get("/stats")

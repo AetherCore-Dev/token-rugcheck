@@ -221,7 +221,11 @@ python3 mainnet_buyer_test.py DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
 ### Health Check
 
 ```
-GET /health → {"status": "healthy", "mode": "production", "uptime_seconds": 4242.6}
+# Development mode — detailed info
+GET /health → {"status": "ok", "service": "token-rugcheck-mcp", "version": "0.1.0"}
+
+# Production mode (RUGCHECK_PRODUCTION=true) — minimal, no internal details
+GET /health → {"status": "ok"}
 ```
 
 | `status` | Meaning |
@@ -289,13 +293,20 @@ X402_MODE=production
 X402_NETWORK=mainnet
 AG402_ADDRESS=<your_solana_wallet>  # Receives USDC payments
 AG402_PRICE=0.02                    # USDC per audit
-SOLANA_PRIVATE_KEY=<base58_key>     # For payment verification
-SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+SOLANA_RPC_URL=https://api.mainnet-beta.solana.com  # Read-only RPC for payment verification
+RUGCHECK_PRODUCTION=true            # Disable /docs, harden /health response
+UVLOOP_INSTALL=0                    # Required: prevents uvloop/aiosqlite crash
 
-# Optional: higher rate limits
+# Optional: prepaid fast-path (~1ms per request instead of ~500ms)
+# Generate: python -c "import secrets; print(secrets.token_hex(32))"
+AG402_PREPAID_SIGNING_KEY=<random_32+_char_key>
+
+# Optional: higher GoPlus rate limits
 GOPLUS_APP_KEY=<key>
 GOPLUS_APP_SECRET=<secret>
 ```
+
+> **Note**: As a seller/provider, you do **not** need `SOLANA_PRIVATE_KEY`. The gateway verifies buyer payments via read-only RPC — no signing required.
 
 ### Consumer Setup
 
@@ -346,10 +357,10 @@ ag402_core.enable()
 | `AG402_PRICE` | `0.02` | USDC per request |
 | `AG402_ADDRESS` | — | Provider wallet (receives payments) |
 | `AG402_GATEWAY_PORT` | `8001` | Gateway port |
+| `AG402_PREPAID_SIGNING_KEY` | — | HMAC signing key for prepaid fast-path (optional, `>=32` chars) |
 | `X402_MODE` | `test` | `test` (mock) / `production` (real) |
 | `X402_NETWORK` | `devnet` | `mock` / `devnet` / `mainnet` |
-| `SOLANA_PRIVATE_KEY` | — | Base58 wallet private key |
-| `SOLANA_RPC_URL` | `https://api.devnet.solana.com` | Solana RPC |
+| `SOLANA_RPC_URL` | `https://api.devnet.solana.com` | Read-only Solana RPC for payment verification |
 
 ### Consumer Safety Limits
 
@@ -374,6 +385,11 @@ ag402 pay <url>              # Send a single paid request
 ag402 demo                   # Quick E2E test (mock mode)
 ag402 demo --devnet          # E2E test with Devnet transactions
 ag402 info                   # Protocol version
+
+# Prepaid packages (v0.1.15+) — pre-purchase call bundles for ~1ms per request
+ag402 prepaid buy <gateway_url> <package_id>  # Purchase a prepaid package
+ag402 prepaid status                          # List all credentials + remaining calls
+ag402 prepaid purge                           # Remove expired/depleted credentials
 ```
 
 ---

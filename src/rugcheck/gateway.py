@@ -143,6 +143,7 @@ def main() -> None:
         token=cfg.ag402_token,
         address=cfg.ag402_address,
         verifier=verifier,
+        prepaid_signing_key=cfg.ag402_prepaid_signing_key,
     )
     app = gw.create_app()
 
