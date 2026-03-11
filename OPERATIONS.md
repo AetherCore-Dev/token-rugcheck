@@ -521,6 +521,28 @@ curl -s http://localhost:8000/health
 | D6 | **setup-server.sh 加入职责注释** | `setup-server.sh` | 📖 文档 | 说明 `setup-server.sh` 始终拉取 main HEAD（初始化路径），与 tag 锁定的 `quick-update.sh` 职责边界明确 |
 | D7 | **.gitignore 新增 .deploy_history** | `.gitignore` | 🔒 安全 | 部署历史（含 commit hash 记录）加入忽略列表，防止运维日志意外提交到公开仓库 |
 
+### v0.1.7 适配 ag402 v0.1.17 — 幂等预付费 + 安全加固 (2026-03)
+
+升级 ag402 依赖至 v0.1.17，获得 TOCTOU 修复和预付费幂等性支持：
+
+| # | 修改内容 | 文件 | 类型 | 说明 |
+|---|----------|------|------|------|
+| D14 | **依赖版本升级至 >=0.1.17** | `pyproject.toml`, `Dockerfile.gateway` | 🔧 依赖 | ag402-mcp / ag402-core 最低版本从 `>=0.1.15` 升至 `>=0.1.17`，Dockerfile.gateway 中的固定版本同步更新 |
+
+**ag402 v0.1.16–v0.1.17 上游变更（对本项目透明，无需代码适配）**：
+
+| 变更 | 描述 |
+|------|------|
+| TOCTOU 竞争条件修复 | 两个并发请求用同一 tx_hash 购买时，`INSERT OR IGNORE` 保证只发出一份凭证 |
+| 幂等 `/prepaid/purchase` | 同一 tx_hash 多次请求返回完全相同的凭证（相同 expiry、签名），超时重试不会被拒绝 |
+| 预付费发证账本 | SQLite `prepaid_issued` 表记录已发证的 tx_hash，网关重启后仍有幂等保护 |
+| buyer_address 冲突改返 403 | 原返 409（信息泄露），现返 403 |
+| 弱签名密钥警告 | `AG402_PREPAID_SIGNING_KEY` 短于 32 字符时打印警告 |
+| 凭证序列化安全 | `to_header_value()` 异常时回滚扣减、降级到 on-chain，不再崩溃 |
+| 新 CLI 命令 | `ag402 prepaid recover` / `ag402 prepaid pending`（买家侧，服务端无感知） |
+
+---
+
 ### v0.1.6 预付费激活 + 安全加固 (2026-03)
 
 激活 ag402 prepaid 预付费功能，修复两个阻塞上线的部署坑，收紧 production 信息泄露：
@@ -564,7 +586,7 @@ curl -s http://localhost:8000/health
 | A5 | 无收入报表 API | 🟢 低 | 解析日志 |
 | A6 | Solana 主网交易确认超时导致 403 | 🟡 中 | 网络瞬时问题，重试即可；网关返回 `Payment not confirmed on-chain` |
 | A7 | `ag402 run` 不自动解密 `wallet.key` | 🟡 中 | `mainnet_buyer_test.py` 已自行实现多源私钥加载（F2/F3） |
-| A8 | ~~ag402 依赖未锁定版本~~ | ✅ 已修复 | `pyproject.toml` 最低版本已锁定为 `>=0.1.15`，包含 prepaid 功能及多项安全修复。`--no-cache` 构建仍拉最新版（>=0.1.15），但不会再拉到缺少 prepaid 支持的旧版本 |
+| A8 | ~~ag402 依赖未锁定版本~~ | ✅ 已修复 | `pyproject.toml` 最低版本已锁定为 `>=0.1.17`，包含 prepaid 功能、TOCTOU 修复及多项安全加固。`--no-cache` 构建仍拉最新版（>=0.1.17），但不会再拉到缺少这些修复的旧版本 |
 
 ### 需要人工处理的一次性事项
 

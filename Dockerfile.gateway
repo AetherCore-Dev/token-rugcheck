@@ -3,7 +3,7 @@ FROM python:3.12.8-slim AS builder
 WORKDIR /app
 COPY pyproject.toml .
 COPY src/ src/
-RUN pip install --no-cache-dir . && pip install --no-cache-dir "ag402-core[crypto]>=0.1.11" "ag402-mcp>=0.1.11"
+RUN pip install --no-cache-dir . && pip install --no-cache-dir "ag402-core[crypto]>=0.1.17" "ag402-mcp>=0.1.17"
 
 FROM python:3.12.8-slim
 

@@ -87,8 +87,16 @@ ag402 setup
 ### Step 3: Run an audit
 
 ```bash
-# Command-line test script (included in this repo)
-python3 mainnet_buyer_test.py DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
+# Python one-liner
+python3 -c "
+import asyncio, httpx, ag402_core
+ag402_core.enable()
+async def run():
+    async with httpx.AsyncClient(timeout=30.0) as c:
+        r = await c.get('https://rugcheck.aethercore.dev/v1/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263')
+        print(r.json()['action'])
+asyncio.run(run())
+"
 ```
 
 Or in Python:
@@ -120,34 +128,18 @@ asyncio.run(check_token("DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"))
 
 ---
 
-## `mainnet_buyer_test.py` — Command-line Audit Tool
+## Command-line Audit Tool (`ag402 pay`)
 
-A standalone script to audit any Solana token via the paid gateway.
-
-```bash
-# Audit one token
-python3 mainnet_buyer_test.py <mint_address>
-
-# Audit multiple tokens
-python3 mainnet_buyer_test.py <mint1> <mint2> <mint3>
-
-# Use a custom gateway
-python3 mainnet_buyer_test.py --gateway https://your-server.com <mint>
-```
-
-**Private key sources** (picks the first available):
-
-| Priority | Source | Setup |
-|----------|--------|-------|
-| 1 | `SOLANA_PRIVATE_KEY` env var | `export SOLANA_PRIVATE_KEY=<base58>` |
-| 2 | `~/.ag402/.env` | Written by `ag402 setup` |
-| 3 | `~/.ag402/wallet.key` (encrypted) | Created by `ag402 setup`, prompts for password |
+You can audit any token directly from the command line using the ag402 CLI:
 
 ```bash
-# Non-interactive (CI/Docker)
-export AG402_UNLOCK_PASSWORD=<wallet_password>
-python3 mainnet_buyer_test.py DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
+# Single request with auto-payment
+ag402 pay https://rugcheck.aethercore.dev/v1/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
+
+# Or use the Python snippet above with a custom gateway
 ```
+
+> **Note**: `mainnet_buyer_test.py` (referenced in OPERATIONS.md history) is a local wallet test script intentionally excluded from the repo via `.gitignore` — it contains wallet-specific configuration not suitable for distribution.
 
 ---
 
@@ -230,7 +222,7 @@ GET /health → {"status": "ok"}
 
 | `status` | Meaning |
 |----------|---------|
-| `healthy` | All systems normal |
+| `ok` | All systems normal |
 | `degraded` | Upstream API failures — service continues with available data |
 
 ---
@@ -390,6 +382,8 @@ ag402 info                   # Protocol version
 ag402 prepaid buy <gateway_url> <package_id>  # Purchase a prepaid package
 ag402 prepaid status                          # List all credentials + remaining calls
 ag402 prepaid purge                           # Remove expired/depleted credentials
+ag402 prepaid pending                         # Show in-flight purchase (if any)
+ag402 prepaid recover <gateway_url>           # Recover credential after timeout/network failure
 ```
 
 ---
@@ -398,7 +392,7 @@ ag402 prepaid purge                           # Remove expired/depleted credenti
 
 ```bash
 pip install -e ".[dev]"
-python -m pytest tests/ -v              # 118 tests
+python -m pytest tests/ -v              # 119 tests
 ruff check src/ tests/                  # Lint
 python examples/demo_agent.py           # E2E demo (direct)
 python examples/demo_agent.py --with-gateway  # E2E demo (with payment)
