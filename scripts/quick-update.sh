@@ -193,6 +193,19 @@ fi
 # --- Step 4: 重新构建并启动 ---
 step "4/6" "重新构建并启动服务"
 
+# Build FIRST — old containers keep serving traffic during build
+info "构建 Docker 镜像 (含 ag402 依赖更新)..."
+BUILD_START=$(date +%s)
+if remote "cd $PROJECT_DIR && docker compose $COMPOSE_FILES build --no-cache" 2>&1 | tail -5; then
+    BUILD_END=$(date +%s)
+    ok "构建完成 ($(( BUILD_END - BUILD_START ))s)"
+else
+    fail "构建失败！服务未受影响（旧容器仍在运行）"
+    fail "查看日志: ssh root@${SERVER_IP} 'cd $PROJECT_DIR && docker compose $COMPOSE_FILES build 2>&1 | tail -50'"
+    exit 1
+fi
+
+# Build succeeded — now swap containers (downtime: seconds only)
 info "停止当前服务..."
 remote "cd $PROJECT_DIR && docker compose $COMPOSE_FILES down --remove-orphans --timeout 30" 2>&1 || true
 
@@ -209,18 +222,8 @@ for PORT in 80 8000; do
     fi
 done
 
-info "构建 Docker 镜像 (含 ag402 依赖更新)..."
-BUILD_START=$(date +%s)
-if remote "cd $PROJECT_DIR && docker compose $COMPOSE_FILES build --no-cache" 2>&1 | tail -5; then
-    BUILD_END=$(date +%s)
-    ok "构建完成 ($(( BUILD_END - BUILD_START ))s)"
-else
-    fail "构建失败！查看日志: ssh root@${SERVER_IP} 'cd $PROJECT_DIR && docker compose $COMPOSE_FILES build 2>&1 | tail -50'"
-    exit 1
-fi
-
-info "启动服务..."
-remote "cd $PROJECT_DIR && docker compose $COMPOSE_FILES up -d" 2>&1
+info "启动服务 (使用预构建镜像)..."
+remote "cd $PROJECT_DIR && docker compose $COMPOSE_FILES up -d --no-build" 2>&1
 ok "服务已启动"
 
 # --- Step 5: 等待健康检查 ---
@@ -288,6 +291,17 @@ if [ -n "$DOMAIN" ]; then
         PASS=$((PASS + 1))
     else
         fail "HTTPS 域名异常: $DOMAIN ($DOMAIN_HTTP)"
+        # DNS diagnostics — only on connection failure (000), not on HTTP errors like 403/502
+        if [ "$DOMAIN_HTTP" = "000" ]; then
+            RESOLVED_IP=$(dig +short "$DOMAIN" 2>/dev/null | head -1)
+            if [ -z "$RESOLVED_IP" ]; then
+                warn "DNS 未解析: $DOMAIN — 请检查 DNS 配置"
+            elif [ "$RESOLVED_IP" != "$SERVER_IP" ]; then
+                warn "DNS 指向 $RESOLVED_IP，期望 $SERVER_IP — 请修正 Cloudflare A 记录"
+            else
+                warn "DNS 正确但 HTTPS 连接失败 — 检查 Cloudflare SSL/TLS 设置"
+            fi
+        fi
         FAIL=$((FAIL + 1))
     fi
 fi
