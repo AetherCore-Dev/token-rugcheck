@@ -314,6 +314,8 @@ AI encounters unknown problem → resolves it → writes lessons/YYYY-MM-DD-<top
      │
      ▼ (every subsequent execution)
 AI starts → scans lessons/ for relevant entries → applies knowledge proactively
+     │         (if applying an existing lesson: increment its Occurrences field
+     │          and append today's date to Occurrence dates)
      │
      ▼ (graduation check at end of execution)
 AI checks: any ungraduated lesson that is
