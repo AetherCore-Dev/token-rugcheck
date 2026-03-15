@@ -46,7 +46,7 @@ Build a framework where AI reads a project manifest + Runbook library, then auto
 │  common/         — truly cross-project (preflight, init) │
 │  templates/      — parameterized patterns (deploy, verify)│
 │  project/<name>/ — project-specific instantiation         │
-│  lessons/        — accumulated experience (auto-evolve)   │
+│  experiences/        — accumulated experience (auto-evolve)   │
 └──────────────────────────┬──────────────────────────────┘
                            │ AI orchestrates
 ┌──────────────────────────▼──────────────────────────────┐
@@ -63,7 +63,7 @@ Human: "Please deploy/maintain this project"
          │
     AI reads manifest.yaml + .env.secrets
          │
-    AI reads lessons/ (scan for relevant experience)
+    AI reads experiences/ (scan for relevant experience)
          │
     AI SSH to server → auto-detect state
          │
@@ -73,18 +73,21 @@ Human: "Please deploy/maintain this project"
     │ Current git commit?           │
     └────┬─────────────────────────┘
          │
-    ┌────▼──────────────────────────────────┐
-    │                    │                   │
-    ▼                    ▼                   ▼
-  Fresh Install      Needs Upgrade        Healthy
-  (no project dir)   (version mismatch)   (version match)
-    │                    │                   │
-    ▼                    ▼                   ▼
-  common/preflight   common/preflight     Health check
-  common/server-init project/deploy       If issues →
-  project/deploy     project/verify         project/troubleshoot
-  project/verify     project/payment-test Report status
-  project/payment-test
+    ┌────▼──────────────────────────────────────────┐
+    │                    │                │          │
+    ▼                    ▼                ▼          ▼
+  Fresh Install      Needs Upgrade    Stopped      Healthy
+  (no project dir)   (version diff)   (containers  (version match,
+    │                    │             exist but    containers up)
+    │                    │             not running)   │
+    ▼                    ▼                │          ▼
+  common/preflight   common/preflight    │       Health check
+  common/server-init project/deploy      │       If issues →
+  project/deploy     project/verify      ▼         project/troubleshoot
+  project/verify     project/payment-test  Restart containers
+  project/payment-test                     → if success: treat as Healthy
+                                           → if fail: project/troubleshoot
+                                           Report status
 ```
 
 ## Layer 1: Project Manifest
@@ -128,6 +131,7 @@ service:
     - action.risk_score
     - action.is_safe
     - metadata.data_sources
+  test_deposit_amount: "0.10"                  # USDC to auto-deposit into ag402 ledger for testing
 
 # === Secrets Reference ===
 # Sensitive values are in .env.secrets (gitignored).
@@ -155,7 +159,7 @@ GOPLUS_APP_SECRET=
 3. **AI command execution**: pass secrets via environment variables, never in command strings
 4. **Execution reports**: redact all secrets — show only `first4...last4`
 5. **Lessons and Runbooks**: never contain actual secret values
-6. **Server .env**: AI writes secrets from .env.secrets into server .env via SSH, using `echo "$VAR" >> .env` (variable expansion on local side only)
+6. **Server .env transfer**: AI writes secrets from `.env.secrets` into server `.env` via `scp` (not via SSH command strings). Pattern: AI generates a complete `.env` locally from template + secrets → `scp .env.generated root@{ip}:{dir}/.env` → delete local `.env.generated`. This avoids both (a) `echo "$VAR" >> .env` duplication on retry and (b) secret values appearing in SSH command strings / remote process listings / audit logs.
 7. **No inline secrets in commands**: AI never passes secrets as command-line arguments or inline environment variables (e.g., `PRIVATE_KEY='xxx' python3 script.py`). Instead, write secrets to server `.env` or a temporary server-side file, then let scripts read from there. This prevents secrets from appearing in process listings, shell history, and tool output logs.
 
 ### manifest.schema.yaml (validation rules)
@@ -270,7 +274,7 @@ To minimize service downtime, the deploy sequence is:
 
 1. `docker compose build --no-cache` — build new images while old containers still serve traffic
 2. If build fails → abort, service never interrupted, no rollback needed
-3. `docker compose down && docker compose up -d` — swap containers (downtime: seconds, not minutes)
+3. `docker compose down --timeout 30 && docker compose up -d --no-build` — swap containers using pre-built images (downtime: seconds, not minutes). The `--no-build` flag ensures `up` uses the images already built in step 1 rather than attempting a fresh pull or rebuild.
 
 This reduces the outage window from "build time + restart time" (60+ seconds) to "restart time only" (< 5 seconds). The existing `quick-update.sh` does down-then-build; enhancing it to build-first is part of the implementation.
 
@@ -298,8 +302,11 @@ Current rollback only reverts code. Enhanced rollback in `06-rollback.md`:
 **Expect**: file created
 
 ### Step 4: Rollback .env (if needed)
-**Do**: `ssh root@{ip} "ls -1t {dir}/.env.bak.* | head -1 | xargs -I BAK cp BAK {dir}/.env"`
+**Do**: `ssh root@{ip} "BAK=\$(ls -1t {dir}/.env.bak.* 2>/dev/null | head -1); [ -n \"\$BAK\" ] && cp \"\$BAK\" {dir}/.env || echo NO_BACKUP"`
 **Expect**: .env restored to pre-deploy state
+**On failure**:
+  - Output contains "NO_BACKUP" → no .env backup exists; AI must reconstruct .env from manifest + .env.secrets + .env.example (use standard .env generation flow)
+  - `ls` or `cp` error → escalate to human with specific error message
 ```
 
 ### Pre-Execution: State Snapshot
@@ -351,10 +358,10 @@ Before any destructive operation (deploy/upgrade/rollback), AI records:
 ### Experience Lifecycle
 
 ```
-AI encounters unknown problem → resolves it → writes lessons/YYYY-MM-DD-<topic>.md
+AI encounters unknown problem → resolves it → writes experiences/YYYY-MM-DD-<topic>.md
      │
      ▼ (every subsequent execution)
-AI starts → scans lessons/ for relevant entries → applies knowledge proactively
+AI starts → scans experiences/ for relevant entries → applies knowledge proactively
      │         (if applying an existing lesson: increment its Occurrences field
      │          and append today's date to Occurrence dates)
      │
@@ -410,7 +417,7 @@ fi
 # Exit codes: 0 = all pass, 1 = fixable issues (AI can handle), 2 = blocking (needs human)
 #
 # Checks:
-#   1. SSH connectivity
+#   1. SSH connectivity          ← BLOCKING: if this fails, skip checks 2-7 and exit 2 immediately
 #   2. DNS resolution matches server IP
 #   3. HTTPS reachability (if domain configured)
 #   4. Disk space > 2GB free
@@ -467,8 +474,11 @@ What it does:
        DEP:ag402-core:pinned=0.1.17:latest=0.1.20:server=0.1.19:ACTION=upgrade-available
 
 Execution modes:
-    - Manual: human says "check for updates" in Claude Code. AI runs locally, reads pyproject.toml from local repo, checks PyPI, then SSH to server to check installed versions.
-    - Cron (optional enhancement): runs ON SERVER, checks installed versions vs PyPI, sends notification on new version:
+    - Manual: human says "check for updates" in Claude Code. AI runs locally, reads pyproject.toml
+      from local repo, checks PyPI, then SSH to server to check installed versions.
+    - Cron (optional enhancement): runs ON SERVER, checks installed versions vs PyPI,
+      sends notification on new version (see Dependency Monitoring section).
+"""
 ```
 
 ## Human Interaction Model
@@ -482,9 +492,9 @@ Execution modes:
 | .env missing variables | Auto-fill from manifest + .env.example, restart containers |
 | Container crashed | Read logs, diagnose, fix, restart |
 | Disk space low | Clean Docker images + old backups (`docker system prune`, remove old backup tarballs) |
-| Port occupied | Identify and kill conflicting process |
+| Port occupied | Verify process belongs to this project (check container name / process command); if yes, kill and restart; if unknown process, escalate to Level 3 |
 | Docker build timeout | Retry up to 3 times |
-| ag402 ledger $0 | Auto-deposit from configured amount |
+| ag402 ledger $0 | Auto-deposit into ledger using `AgentWallet.deposit()` with amount from `service.test_deposit_amount` in manifest (default: $0.10) |
 | Payment test needs deps | Install `ag402-core[crypto]` on server |
 | Non-critical verification fails but service works | Record in report, continue |
 
@@ -549,7 +559,7 @@ Generated after every execution to `ops/reports/YYYY-MM-DD-<action>.md`:
 - .env hash: a1b2c3d4
 
 ## New Experiences
-- (none, or link to new lessons/ file)
+- (none, or link to new experiences/ file)
 
 ## Rollback Command
 bash scripts/quick-update.sh {ip} "{domain}" f68a5ce
@@ -603,7 +613,7 @@ Step-by-step guide for non-technical users to prepare infrastructure before AI t
 ```
 ops/
 ├── manifest.yaml                # Project config (git-tracked, no secrets)
-├── manifest.yaml.example        # Template with inline docs
+├── manifest.yaml.example        # Template with inline docs (same structure as manifest.yaml above, with placeholder values like `your-server-ip`, `your-domain.example.com`)
 ├── manifest.schema.yaml         # Validation rules
 ├── .env.secrets                 # Sensitive values (gitignored)
 ├── .env.secrets.example         # Template showing required secret fields
@@ -631,10 +641,10 @@ ops/
 │           ├── rollback.md
 │           └── troubleshoot.md
 │
-├── lessons/                     # AI-accumulated experience
+├── experiences/                     # AI-accumulated experience
 │   └── (auto-generated files)
 │
-└── reports/                     # AI-generated execution reports
+└── reports/                     # AI-generated execution reports (retain latest 50, archive older)
     └── (auto-generated files)
 
 scripts/                         # All scripts in project root (single location)
@@ -670,7 +680,7 @@ scripts/                         # All scripts in project root (single location)
 | Payment test protocol | Template | Test endpoint, expected schema |
 | Troubleshoot decision trees | Template (infra) | Business-level failures |
 | Experience library | Per-project | Per-project |
-| Manifest schema | Shared core | Project-specific extensions |
+| Manifest schema | Shared core fields (project, server, domain, blockchain, service.price, service.health_endpoint) | Project-specific fields under `service.test_*` and `service.custom.*` namespaces |
 
 ## Dependency Monitoring
 
@@ -706,7 +716,7 @@ When asked to deploy, upgrade, maintain, or check this project:
 
 1. Read `ops/manifest.yaml` for project config
 2. Read `ops/.env.secrets` for sensitive values (NEVER log or echo these)
-3. Scan `ops/lessons/` for relevant experience entries
+3. Scan `ops/experiences/` for relevant experience entries
 4. SSH to server → auto-detect current state (fresh / needs upgrade / healthy)
 5. Follow the appropriate Runbook in `ops/runbooks/project/{project.name}/`
    - If project Runbooks don't exist yet, generate them from `ops/runbooks/templates/`
@@ -720,7 +730,7 @@ This ensures every AI session starts with the same entry point, regardless of wh
 
 ### Known Non-Goals (MVP)
 
-- **Concurrent operations**: no locking mechanism for simultaneous AI sessions or human+AI operating on the same server. Usage pattern is single-operator.
+- **Concurrent operations**: no locking mechanism for simultaneous AI sessions or human+AI operating on the same server. Usage pattern is single-operator. This includes the experience library — parallel sessions could write conflicting experience files. Mitigation: single-operator usage pattern makes this unlikely; if it occurs, AI should deduplicate on next scan.
 - **Non-ag402 services**: framework is designed for ag402+FastAPI+Docker+VPS. Other stacks are out of scope.
 - **Fully automated upgrade trigger**: Phase 1 is human-triggered. Automated monitoring (Phase 2) is optional enhancement.
 - **Secrets encryption at rest**: MVP uses plaintext `.env.secrets` (local) and server `.env`. Acceptable for single-operator VPS. Future enhancement: use `ag402 wallet.key` encryption or HashiCorp Vault.
@@ -731,7 +741,7 @@ This ensures every AI session starts with the same entry point, regardless of wh
 - [ ] Upgrade: AI detects version mismatch, completes upgrade + verify + payment test autonomously
 - [ ] Rollback: AI can roll back code AND .env to pre-deploy state
 - [ ] Payment test: works first try using Runbook (no trial-and-error)
-- [ ] Experience: new problems get written to lessons/, existing lessons get applied
+- [ ] Experience: new problems get written to experiences/, existing experiences get applied
 - [ ] Secrets: no plaintext secrets in git, reports, or command outputs
-- [ ] New project: second ag402 service can onboard by filling manifest alone (AI auto-generates Runbooks)
+- [ ] New project: second ag402 service can onboard by filling manifest alone — shared core fields stay the same, project-specific fields go under `service.test_*` and `service.custom.*` namespaces. AI auto-generates Runbooks from templates using manifest values.
 - [ ] DNS failure: AI diagnoses root cause and gives human specific Cloudflare instructions
