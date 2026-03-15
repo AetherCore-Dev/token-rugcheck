@@ -165,6 +165,15 @@ required_fields:
 
 ip_format: "^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$"
 seller_address_format: "^[1-9A-HJ-NP-Za-km-z]{32,44}$"  # base58
+
+enums:
+  blockchain.network: [mainnet, devnet]
+  domain.cdn: [cloudflare, none]
+  domain.ssl_mode: [flexible, full]
+
+formats:
+  domain.name: "^[a-z0-9.-]+\\.[a-z]{2,}$"
+  service.price: "^\\d+\\.\\d{2}$"
 ```
 
 ## Layer 2: Runbook Library
@@ -206,6 +215,8 @@ ops/runbooks/
         ├── deploy.md          # Calls scripts/quick-update.sh, interprets output
         ├── verify.md          # 7 verification points specific to this project
         ├── payment-test.md    # BONK audit test via async httpx + localhost
+        ├── upgrade.md         # Upgrade flow (preflight + deploy + verify + payment-test)
+        ├── rollback.md        # Rollback with .env restoration
         └── troubleshoot.md    # Project-specific failure modes
 ```
 
@@ -246,7 +257,7 @@ Current rollback only reverts code. Enhanced rollback in `06-rollback.md`:
 **Expect**: file created
 
 ### Step 4: Rollback .env (if needed)
-**Do**: `ssh root@{ip} "ls -1t {dir}/.env.bak.* | head -1 | xargs -I{} cp {} {dir}/.env"`
+**Do**: `ssh root@{ip} "ls -1t {dir}/.env.bak.* | head -1 | xargs -I BAK cp BAK {dir}/.env"`
 **Expect**: .env restored to pre-deploy state
 ```
 
@@ -275,6 +286,8 @@ Before any destructive operation (deploy/upgrade/rollback), AI records:
 **Project**: <project name>
 **Scenario**: <what was being done>
 **Applies to**: <version/component scope>
+**Occurrences**: 1
+**Occurrence dates**: [YYYY-MM-DD]
 
 ## Problem
 <what went wrong — one paragraph>
@@ -305,7 +318,7 @@ AI starts → scans lessons/ for relevant entries → applies knowledge proactiv
      ▼ (graduation check at end of execution)
 AI checks: any ungraduated lesson that is
   (a) blocking-severity, OR
-  (b) encountered 2+ times (check dates)?
+  (b) Occurrences >= 2 (check the Occurrences field)?
      │
   Yes → incorporate into project Runbook step or "Do NOT attempt" entry
      → mark lesson as graduated
@@ -411,8 +424,8 @@ What it does:
        DEP:ag402-core:pinned=0.1.17:latest=0.1.20:server=0.1.19:ACTION=upgrade-available
 
 Execution modes:
-    - Manual: human says "check for updates" in Claude Code
-    - Cron (optional enhancement): server cron runs daily, sends notification on new version
+    - Manual: human says "check for updates" in Claude Code. AI runs locally, reads pyproject.toml from local repo, checks PyPI, then SSH to server to check installed versions.
+    - Cron (optional enhancement): runs ON SERVER, checks installed versions vs PyPI, sends notification on new version:
 ```
 
 ## Human Interaction Model
@@ -571,6 +584,8 @@ ops/
 │           ├── deploy.md
 │           ├── verify.md
 │           ├── payment-test.md
+│           ├── upgrade.md
+│           ├── rollback.md
 │           └── troubleshoot.md
 │
 ├── lessons/                     # AI-accumulated experience
@@ -633,6 +648,14 @@ Server cron runs `monitor-deps.py` daily. On new version detected, sends notific
 Human sees GitHub Issue → opens Claude Code → says "upgrade to ag402 0.1.20" → AI executes full upgrade flow.
 
 ## Success Criteria
+
+### Known Non-Goals (MVP)
+
+- **Concurrent operations**: no locking mechanism for simultaneous AI sessions or human+AI operating on the same server. Usage pattern is single-operator.
+- **Non-ag402 services**: framework is designed for ag402+FastAPI+Docker+VPS. Other stacks are out of scope.
+- **Fully automated upgrade trigger**: Phase 1 is human-triggered. Automated monitoring (Phase 2) is optional enhancement.
+
+### Acceptance Criteria
 
 - [ ] Fresh install: AI completes zero-to-live from manifest alone (no human intervention after manifest is ready)
 - [ ] Upgrade: AI detects version mismatch, completes upgrade + verify + payment test autonomously
