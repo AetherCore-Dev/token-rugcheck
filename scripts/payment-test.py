@@ -15,6 +15,7 @@ Known constraints (do NOT attempt alternatives):
 """
 import argparse
 import asyncio
+import os
 import sys
 import re
 
@@ -35,7 +36,42 @@ def check_dependency(module_name, install_hint):
 def check_all_dependencies():
     """Verify all required third-party packages are available."""
     check_dependency("httpx", "pip install httpx")
-    check_dependency("ag402", "pip install ag402-core[crypto]")
+    check_dependency("ag402_core", "pip install ag402-core[crypto]")
+
+
+# ---------------------------------------------------------------------------
+# Secrets loading (sets env vars from .env.secrets file)
+# ---------------------------------------------------------------------------
+
+def load_secrets(path):
+    """Load KEY=VALUE lines from secrets file into os.environ.
+
+    Only sets values that are NOT already in the environment and are NOT
+    placeholder values (containing '<' or 'placeholder').
+    """
+    import os
+    try:
+        with open(path) as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if "=" in stripped:
+                    key, _, value = stripped.partition("=")
+                    key = key.strip()
+                    value = value.strip()
+                    # Skip placeholder values
+                    if "<" in value or "placeholder" in value.lower():
+                        continue
+                    # Don't overwrite existing env vars
+                    if key not in os.environ:
+                        os.environ[key] = value
+        # Map BUYER_PRIVATE_KEY to SOLANA_PRIVATE_KEY if ag402 needs it
+        if "BUYER_PRIVATE_KEY" in os.environ and "SOLANA_PRIVATE_KEY" not in os.environ:
+            os.environ["SOLANA_PRIVATE_KEY"] = os.environ["BUYER_PRIVATE_KEY"]
+    except FileNotFoundError:
+        print(f"PAYMENT_TEST:FAIL:Secrets file not found: {path}")
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -136,21 +172,31 @@ def check_field(data, field_path):
 # Payment test
 # ---------------------------------------------------------------------------
 
-async def run_payment_test(config):
+async def run_payment_test(config, paid_mode=False):
     """Execute the ag402 payment test and return (success, detail)."""
+    import os
     import httpx  # noqa: E402 — deferred so --help works without deps
 
-    # 1. Initialize wallet if needed
-    from ag402.wallet import AgentWallet  # noqa: delayed import after dep check
+    # 0. Enable ag402 monkey-patching only in paid mode
+    if paid_mode:
+        os.environ.setdefault("X402_MODE", "production")
+        os.environ.setdefault("X402_NETWORK", config.get("blockchain.network", "mainnet"))
+        import ag402_core
+        ag402_core.enable()
 
-    wallet = AgentWallet()
-    balance = wallet.get_balance()
-    if balance <= 0:
-        deposit_amount = float(config.get("service.test_deposit_amount", "0.10"))
-        wallet.deposit(deposit_amount)
-        balance = wallet.get_balance()
+    # 1. Initialize wallet if needed (only for paid mode)
+    if paid_mode:
+        from ag402_core.wallet.agent_wallet import AgentWallet  # noqa: delayed import after dep check
+
+        wallet = AgentWallet()
+        await wallet.init_db()
+        balance = await wallet.get_balance()
         if balance <= 0:
-            return False, "Wallet deposit failed — balance still $0"
+            deposit_amount = float(config.get("service.test_deposit_amount", "0.10"))
+            await wallet.deposit(deposit_amount)
+            balance = await wallet.get_balance()
+            if balance <= 0:
+                return False, "Wallet deposit failed — balance still $0"
 
     # 2. Build request URL (gateway on port 80)
     endpoint = config.get("service.test_endpoint")
@@ -208,6 +254,17 @@ def build_parser():
         required=True,
         help="Path to ops/manifest.yaml",
     )
+    parser.add_argument(
+        "--paid",
+        action="store_true",
+        default=False,
+        help="Paid mode: expect 200 (after ag402 auto-payment) instead of manifest's test_expect_status",
+    )
+    parser.add_argument(
+        "--secrets",
+        default=None,
+        help="Path to .env.secrets file (sources BUYER_PRIVATE_KEY, SOLANA_RPC_URL)",
+    )
     return parser
 
 
@@ -217,6 +274,14 @@ def main():
 
     # Check dependencies after argparse so --help works without deps
     check_all_dependencies()
+
+    # Load secrets if provided (sets env vars before ag402 reads them)
+    # Load project .env FIRST (has real SOLANA_RPC_URL), then secrets (adds BUYER key)
+    project_env = os.path.join(os.path.dirname(args.manifest), "..", ".env")
+    if os.path.exists(project_env):
+        load_secrets(project_env)
+    if args.secrets:
+        load_secrets(args.secrets)
 
     # Parse manifest
     try:
@@ -228,9 +293,14 @@ def main():
         print(f"PAYMENT_TEST:FAIL:Manifest parse error: {exc}")
         sys.exit(1)
 
+    # Override expected status for paid mode
+    if args.paid:
+        config["service.test_expect_status"] = "200"
+        config["service.test_expect_fields"] = ["action.risk_score", "action.is_safe", "metadata.data_sources"]
+
     # Run async test
     try:
-        success, detail = asyncio.run(run_payment_test(config))
+        success, detail = asyncio.run(run_payment_test(config, paid_mode=args.paid))
     except Exception as exc:
         print(f"PAYMENT_TEST:FAIL:Unexpected error: {exc}")
         sys.exit(1)
