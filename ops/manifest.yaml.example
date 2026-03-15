@@ -1,0 +1,45 @@
+# =============================================================================
+# Token RugCheck MCP — Deployment Manifest (Example)
+# =============================================================================
+# Copy this file to ops/manifest.yaml and fill in your values.
+# Secrets belong in ops/.env.secrets (see .env.secrets.example).
+# =============================================================================
+
+# ── Project metadata ─────────────────────────────────────────────────────────
+project:
+  name: token-rugcheck-mcp            # Short project identifier
+  repo: <YOUR_GITHUB_ORG>/Token_RugCheck_MCP   # GitHub owner/repo
+  git_ref: main                       # Branch or tag to deploy
+
+# ── Target server ─────────────────────────────────────────────────────────────
+server:
+  ip: <YOUR_SERVER_IP>                # e.g. 203.0.113.42
+  ssh_user: <YOUR_SSH_USER>           # e.g. deploy
+  ssh_key_path: ~/.ssh/id_ed25519     # Path to SSH private key (local)
+  project_dir: /opt/rugcheck          # Absolute path on the server
+
+# ── Domain & CDN ──────────────────────────────────────────────────────────────
+domain:
+  name: <YOUR_DOMAIN>                 # e.g. rugcheck.example.com
+  cdn: cloudflare                     # cloudflare | none
+  ssl_mode: flexible                  # flexible | full
+
+# ── Blockchain ────────────────────────────────────────────────────────────────
+blockchain:
+  network: devnet                     # mainnet | devnet
+  seller_address: <YOUR_SOLANA_WALLET_ADDRESS>  # Base58 seller/merchant address
+
+# ── Service configuration ─────────────────────────────────────────────────────
+service:
+  price: "0.01"                       # Price per request in SOL (string)
+  free_daily_quota: 10                # Free requests per day (0 to disable)
+  production_mode: false              # true for mainnet production
+  health_endpoint: /health            # Health-check path
+  test_endpoint: /mcp                 # Endpoint used for smoke tests
+  test_expect_status: 200             # Expected HTTP status from test
+  test_expect_fields:                 # Fields that must exist in test response
+    - result
+  test_deposit_amount: "0.05"         # SOL to deposit when testing prepaid
+
+# ── Secrets reference ─────────────────────────────────────────────────────────
+secrets_file: ops/.env.secrets        # Path to secrets file (gitignored)

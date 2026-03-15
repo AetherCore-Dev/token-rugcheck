@@ -1,0 +1,35 @@
+# =============================================================================
+# Token RugCheck MCP — Manifest Validation Schema
+# =============================================================================
+# Used by ops tooling to validate ops/manifest.yaml before deployment.
+# =============================================================================
+
+# Fields that MUST be present and non-empty in a valid manifest
+required_fields:
+  - project.name
+  - project.repo
+  - project.git_ref
+  - server.ip
+  - server.ssh_user
+  - server.project_dir
+  - blockchain.network
+  - blockchain.seller_address
+  - service.price
+  - service.health_endpoint
+  - service.test_endpoint
+  - service.test_expect_status
+
+# Regex patterns for value validation
+ip_format: "^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$"
+seller_address_format: "^[1-9A-HJ-NP-Za-km-z]{32,44}$"
+
+# Allowed values for enum fields
+enums:
+  blockchain.network: [mainnet, devnet]
+  domain.cdn: [cloudflare, none]
+  domain.ssl_mode: [flexible, full]
+
+# Regex patterns for format validation
+formats:
+  domain.name: "^[a-z0-9.-]+\\.[a-z]{2,}$"
+  service.price: "^\\d+\\.\\d{2}$"

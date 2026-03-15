@@ -44,3 +44,12 @@ TODO.md
 
 # Backup files
 backups/
+
+# Ops secrets & reports (local-only)
+ops/.env.secrets
+ops/manifest.yaml
+ops/reports/
+
+# Un-ignore example templates (overrides .env.* pattern from above)
+!ops/.env.secrets.example
+!ops/manifest.yaml.example
