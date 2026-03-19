@@ -26,17 +26,20 @@ Client (AI Agent)
 Cloudflare CDN (SSL termination, DDoS protection)
   │ HTTP → :80 (Flexible 模式)
   ▼
-┌─────────────────────────────────────────────┐
-│  Docker Compose                             │
-│                                             │
-│  ┌─────────────┐     ┌──────────────────┐   │
-│  │ ag402-gateway│────▶│ rugcheck-audit   │   │
-│  │ :80 (public) │     │ :8000 (internal) │   │
-│  │ 支付验证     │     │ 审计引擎         │   │
-│  └──────┬──────┘     └──────────────────┘   │
-│         │                                    │
-│    ag402-data (SQLite volume, 重放保护)       │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│  Docker Compose                                 │
+│                                                 │
+│  ┌──────────────────────┐  ┌──────────────────┐ │
+│  │ ag402-gateway :80    │  │ rugcheck-audit   │ │
+│  │ (QuotaAwareGateway)  │  │ :8000 (internal) │ │
+│  │                      │  │ 审计引擎         │ │
+│  │  免费配额剩余?       │  │                  │ │
+│  │  ├─ 是 → HTTP proxy ─┼─▶│                  │ │
+│  │  └─ 否 → 402 付费   │  │                  │ │
+│  └──────────┬───────────┘  └──────────────────┘ │
+│             │                                   │
+│        ag402-data (SQLite volume, 重放保护)       │
+└─────────────────────────────────────────────────┘
 ```
 
 ### 组件说明
@@ -44,7 +47,7 @@ Cloudflare CDN (SSL termination, DDoS protection)
 | 组件 | 端口 | 说明 |
 |------|------|------|
 | **rugcheck-audit** | `127.0.0.1:8000`（仅本机） | FastAPI 审计服务，不对外暴露 |
-| **ag402-gateway** | `:80`（对外） | 支付网关，验证 USDC 链上支付后转发请求到审计服务 |
+| **ag402-gateway** | `:80`（对外） | QuotaAwareGateway：免费配额内直接 HTTP 代理到审计服务，配额耗尽后返回 402 要求支付 |
 | **ag402-data** | — | Docker volume，存储 SQLite 重放保护数据（**必须备份**） |
 
 ### Cloudflare SSL 方案
@@ -439,6 +442,7 @@ curl -s http://localhost:8000/health
 | `UVLOOP_INSTALL` | ✅ | 必须设为 0（防止 uvloop/aiosqlite 冲突导致 gateway 崩溃） | `0` |
 | `UVICORN_WORKERS` | 可选 | worker 进程数 | `1`（默认） |
 | `UVICORN_LIMIT_CONCURRENCY` | 可选 | 最大并发连接数 | `0`（无限制） |
+| `FREE_QUOTA_ENABLED` | 可选 | 网关免费层开关。`true` 启用每 IP 每日免费配额，`false` 所有请求直接走付费 | `true`（默认） |
 | `GOPLUS_APP_KEY` | 可选 | GoPlus API key | — |
 | `GOPLUS_APP_SECRET` | 可选 | GoPlus API secret | — |
 
@@ -520,6 +524,53 @@ curl -s http://localhost:8000/health
 | D5 | **deploy-oneclick.sh 加入职责说明** | `deploy-oneclick.sh` | 📖 文档 | Phase 5 新增提示，明确此脚本用于首次部署/完整重配，日常更新应使用 `quick-update.sh <IP> <domain> <tag>` |
 | D6 | **setup-server.sh 加入职责注释** | `setup-server.sh` | 📖 文档 | 说明 `setup-server.sh` 始终拉取 main HEAD（初始化路径），与 tag 锁定的 `quick-update.sh` 职责边界明确 |
 | D7 | **.gitignore 新增 .deploy_history** | `.gitignore` | 🔒 安全 | 部署历史（含 commit hash 记录）加入忽略列表，防止运维日志意外提交到公开仓库 |
+
+### v0.2.0 Gateway 感知配额 — 免费层 + HTTP 代理架构 (2026-03)
+
+解决 Issue #2：`FREE_DAILY_QUOTA` 在生产环境中失效（ag402-gateway 无条件返回 402）。新增 `QuotaAwareGateway` 包装层，在支付墙前提供免费配额。
+
+**新增文件**：
+
+| 文件 | 说明 |
+|------|------|
+| `src/rugcheck/quota.py` | 共享配额模块：`DailyQuota`（per-IP 每日计数器）、`QuotaResult`（冻结数据类）、`resolve_client_ip`（代理感知 IP 解析）、`TRUSTED_PROXY_NETWORKS`（Cloudflare IP 段） |
+| `src/rugcheck/gateway_wrapper.py` | `QuotaAwareGateway`：包装 X402Gateway，免费配额内 HTTP 代理到审计服务，配额耗尽后 fallthrough 到 402 |
+| `tests/test_quota.py` | 18 个测试：配额基本行为、每日重置、并发安全、IP 解析、Cloudflare 信任 |
+| `tests/test_gateway_wrapper.py` | 16 个测试：免费路径、配额递减、402 fallthrough、health bypass、metrics |
+
+**功能变更**：
+
+| # | 修改内容 | 文件 | 类型 | 说明 |
+|---|----------|------|------|------|
+| F9 | **QuotaAwareGateway 免费层** | `gateway_wrapper.py` | 🔧 功能 | 每 IP 每天 `FREE_DAILY_QUOTA` 次免费请求，HTTP 代理到审计服务；配额耗尽后 402 要求付费。响应包含 `X-Free-Remaining` 和 `X-Quota-Tier` 头 |
+| F10 | **共享配额模块提取** | `quota.py` | 🔧 重构 | 从 `server.py` 提取 `DailyQuota`、`resolve_client_ip`、`TRUSTED_PROXY_NETWORKS` 到独立模块，gateway 和 server 共享 |
+| F11 | **FREE_QUOTA_ENABLED 开关** | `gateway.py`, `.env.example` | 🔧 功能 | 新增环境变量 `FREE_QUOTA_ENABLED`（默认 `true`），设为 `false` 则所有请求直接走付费 |
+
+**安全加固**：
+
+| # | 修复内容 | 文件 | 严重度 | 说明 |
+|---|----------|------|--------|------|
+| S17 | **content-encoding 响应损坏修复** | `gateway_wrapper.py` | 🔴 高 | httpx 透明解压 body 但保留原始 content-encoding 头；移除白名单中的 content-encoding 防止客户端双重解压 |
+| S18 | **IPv6 配额绕过修复** | `quota.py` | 🔴 高 | 同一 IPv6 地址不同字符串表示创建独立配额桶；使用 `str(ipaddress.ip_address())` 规范化 |
+| S19 | **代理头剥离扩展** | `gateway_wrapper.py` | 🟡 中 | 新增 RFC 7230 §6.1 hop-by-hop 头剥离：connection、keep-alive、te、trailer、upgrade |
+| S20 | **TOCTOU 午夜竞态修复** | `quota.py` | 🟡 中 | `_today()` 调用移入 `asyncio.Lock` 内，防止午夜时刻配额多授一次 |
+| S21 | **hop-by-hop 响应头过滤** | `gateway_wrapper.py` | 🟡 中 | `_forward_to_gateway` 响应过滤 transfer-encoding/connection/content-length |
+| S22 | **URL 路径规范化** | `gateway_wrapper.py` | 🟡 中 | `_build_forward_url` 规范化为单前导斜杠，防止协议相对 URL 问题 |
+
+**性能优化**：
+
+| # | 修改内容 | 文件 | 说明 |
+|---|----------|------|------|
+| P1 | **连接池扩容** | `gateway_wrapper.py` | `max_connections` 50→200，`max_keepalive_connections` 20→50 |
+| P2 | **ASGI gateway 客户端复用** | `gateway_wrapper.py` | 付费路径客户端在 lifespan 创建并复用，替代每请求创建 |
+| P3 | **配额清理启动即运行** | `gateway_wrapper.py` | `_quota_cleanup_loop` 启动即执行一次，不再等待 1 小时 |
+| P4 | **cleanup_task 正确等待取消** | `gateway_wrapper.py` | lifespan shutdown 中 `await cleanup_task` 防止任务泄漏 |
+
+**测试**：78 → 117 → 118 → 119 → **153 个**（+34 个新增）
+
+**新增环境变量**：`FREE_QUOTA_ENABLED`
+
+---
 
 ### v0.1.7 适配 ag402 v0.1.17 — 幂等预付费 + 安全加固 (2026-03)
 

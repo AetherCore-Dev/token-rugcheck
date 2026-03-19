@@ -145,7 +145,28 @@ def main() -> None:
         verifier=verifier,
         prepaid_signing_key=cfg.ag402_prepaid_signing_key,
     )
-    app = gw.create_app()
+    gateway_app = gw.create_app()
+
+    # --- Quota-aware wrapper: free tier before payment wall ---
+    from rugcheck.gateway_wrapper import QuotaAwareGateway
+    from rugcheck.quota import DailyQuota
+
+    daily_quota = DailyQuota(max_daily=cfg.free_daily_quota)
+    free_quota_enabled = os.getenv("FREE_QUOTA_ENABLED", "true").lower() in ("1", "true", "yes")
+
+    wrapper = QuotaAwareGateway(
+        gateway_app=gateway_app,
+        target_url=target_url,
+        daily_quota=daily_quota,
+        free_quota_enabled=free_quota_enabled,
+    )
+    app = wrapper.create_app()
+
+    logger.info(
+        "[GATEWAY] Free quota: %s (%d/day per IP)",
+        "enabled" if free_quota_enabled else "disabled",
+        cfg.free_daily_quota,
+    )
 
     host = os.getenv("AG402_GATEWAY_HOST", "0.0.0.0")
     port = cfg.ag402_gateway_port

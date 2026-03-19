@@ -177,14 +177,14 @@ async def test_free_daily_quota_exhaustion():
     ip = "203.0.113.10"
 
     for i in range(5):
-        allowed, remaining = await quota.check(ip)
-        assert allowed
-        assert remaining == 5 - i - 1
+        result = await quota.check(ip)
+        assert result.allowed
+        assert result.remaining == 5 - i - 1
 
     # 6th request should be blocked
-    allowed, remaining = await quota.check(ip)
-    assert not allowed
-    assert remaining == 0
+    result = await quota.check(ip)
+    assert not result.allowed
+    assert result.remaining == 0
 
 
 async def test_free_daily_quota_per_ip():
@@ -194,17 +194,17 @@ async def test_free_daily_quota_per_ip():
     quota = DailyQuota(max_daily=3)
 
     for _ in range(3):
-        allowed, _ = await quota.check("10.0.0.1")
-        assert allowed
+        result = await quota.check("10.0.0.1")
+        assert result.allowed
 
     # 10.0.0.1 is exhausted
-    allowed, _ = await quota.check("10.0.0.1")
-    assert not allowed
+    result = await quota.check("10.0.0.1")
+    assert not result.allowed
 
     # 10.0.0.2 still has quota
-    allowed, remaining = await quota.check("10.0.0.2")
-    assert allowed
-    assert remaining == 2
+    result = await quota.check("10.0.0.2")
+    assert result.allowed
+    assert result.remaining == 2
 
 
 async def test_paid_rate_limit_loopback():

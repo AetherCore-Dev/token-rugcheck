@@ -6,11 +6,14 @@
 # Quick test — no setup needed
 curl https://rugcheck.aethercore.dev/health
 
-# See the 402 paywall in action
+# Free tier (20 requests/day per IP, no payment needed)
+curl https://rugcheck.aethercore.dev/v1/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
+
+# After free quota exhausted, see the 402 paywall
 curl https://rugcheck.aethercore.dev/v1/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
 ```
 
-**What you get**: A three-layer safety audit for any Solana token — machine-readable verdict, LLM-friendly analysis, and raw evidence — all in one API call for **$0.02 USDC**.
+**What you get**: A three-layer safety audit for any Solana token — machine-readable verdict, LLM-friendly analysis, and raw evidence — all in one API call. **20 free requests/day per IP**, then **$0.02 USDC** per request.
 
 Powered by [ag402](https://github.com/AetherCore-Dev/ag402) on-chain micropayments.
 
@@ -40,6 +43,15 @@ https://github.com/user-attachments/assets/6e359374-8caf-41c7-8bd1-14f63eb6d6e8
 
 ```
 Your AI Agent                        RugCheck Service
+     │                                      │
+     │  GET /v1/audit/{mint}                │
+     ├─────────────────────────────────────▶│
+     │                                      │
+     │  200 OK + Audit Report               │  ← Free tier (20/day per IP)
+     │  X-Free-Remaining: 19                │
+     │◀─────────────────────────────────────┤
+     │                                      │
+     │  ... after free quota exhausted ...  │
      │                                      │
      │  GET /v1/audit/{mint}                │
      ├─────────────────────────────────────▶│
@@ -240,14 +252,17 @@ Client (AI Agent)
 Cloudflare (SSL termination, DDoS protection)
   │ HTTP:80
   ▼
-┌─────────────────────────────────────────────┐
-│  Docker Compose                             │
-│  ┌─────────────┐     ┌──────────────────┐   │
-│  │ ag402-gateway│────▶│ rugcheck-audit   │   │
-│  │ :80 (public) │     │ :8000 (internal) │   │
-│  │ Payment gate │     │ Audit engine     │   │
-│  └─────────────┘     └──────────────────┘   │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│  Docker Compose                                 │
+│  ┌──────────────────────┐  ┌──────────────────┐ │
+│  │ ag402-gateway :80    │  │ rugcheck-audit   │ │
+│  │ (QuotaAwareGateway)  │  │ :8000 (internal) │ │
+│  │                      │  │ Audit engine     │ │
+│  │  free quota left?    │  │                  │ │
+│  │  ├─ yes → HTTP proxy─┼─▶│                  │ │
+│  │  └─ no  → 402 pay   │  │                  │ │
+│  └──────────────────────┘  └──────────────────┘ │
+└─────────────────────────────────────────────────┘
 ```
 
 ### Three Environments
@@ -330,6 +345,7 @@ ag402_core.enable()
 | `CACHE_TTL_SECONDS` | `3` | Cache TTL (short to catch rug pulls) |
 | `CACHE_MAX_SIZE` | `5000` | Max cached entries (LRU) |
 | `FREE_DAILY_QUOTA` | `20` | Free requests per IP per day |
+| `FREE_QUOTA_ENABLED` | `true` | Enable/disable the free tier in the gateway |
 | `PAID_RATE_LIMIT` | `120` | Paid requests per IP per minute |
 
 ### Upstream APIs
@@ -392,7 +408,7 @@ ag402 prepaid recover <gateway_url>           # Recover credential after timeout
 
 ```bash
 pip install -e ".[dev]"
-python -m pytest tests/ -v              # 119 tests
+python -m pytest tests/ -v              # 153 tests
 ruff check src/ tests/                  # Lint
 python examples/demo_agent.py           # E2E demo (direct)
 python examples/demo_agent.py --with-gateway  # E2E demo (with payment)
@@ -405,9 +421,11 @@ src/rugcheck/
 ├── config.py              # Environment-based configuration
 ├── models.py              # Pydantic models (report schema)
 ├── cache.py               # Async-safe TTL cache (LRU, asyncio.Lock)
+├── quota.py               # Shared quota & IP resolution (DailyQuota, resolve_client_ip)
 ├── server.py              # FastAPI app + rate limiter + health checks
 ├── main.py                # Audit server entry point
 ├── gateway.py             # ag402 gateway entry point
+├── gateway_wrapper.py     # QuotaAwareGateway — free-tier bypass + HTTP proxy
 ├── fetchers/
 │   ├── base.py            # BaseFetcher ABC
 │   ├── goplus.py          # GoPlus Security API
@@ -420,10 +438,13 @@ src/rugcheck/
 
 ### Security
 
+- **Free-tier gateway** — 20/day per IP with `X-Free-Remaining` header; quota-exhausted → 402
 - **Rate limiting** — free: 20/day per IP; paid: 120/min per IP
-- **Trusted proxy model** — `CF-Connecting-IP` only trusted from Cloudflare IPs
+- **Trusted proxy model** — `CF-Connecting-IP` only trusted from Cloudflare IPs; IPv6 normalized
+- **Header stripping** — proxy/hop-by-hop headers stripped before forwarding (anti-spoofing)
 - **Production hardening** — `/docs`, `/redoc`, `/openapi.json` disabled
 - **Gateway fail-safe** — refuses to start if payment verifier fails in production
+- **Graceful degradation** — free-tier proxy failure falls through to 402 payment path
 - **Cache isolation** — deep-copy on get/set prevents shared state corruption
 - **Degraded short-TTL** — incomplete reports cached only 10s
 - **Prometheus path normalization** — prevents cardinality explosion
@@ -436,7 +457,7 @@ src/rugcheck/
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| `402 Payment Required` | Expected — gateway requires USDC payment | Use `ag402_core.enable()` or `ag402 pay <url>` |
+| `402 Payment Required` | Free daily quota exhausted (check `X-Free-Remaining` header) | Wait for UTC midnight reset, or use `ag402_core.enable()` / `ag402 pay <url>` for paid access |
 | `InsufficientFundsForRent` | Wallet SOL too low for ATA creation | Send ≥ 0.01 SOL to your wallet |
 | `Payment not confirmed on-chain` (403) | Solana network confirmation timeout | Retry — transient network issue |
 | `ValueError: Production mode requires PaymentVerifier` | Missing crypto deps | `pip install -e ".[crypto]"` |

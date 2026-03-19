@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import logging
 import re
 import time
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, FastAPI, HTTPException, Request
@@ -24,41 +22,15 @@ from rugcheck.engine.risk_engine import build_report
 from rugcheck.fetchers.aggregator import Aggregator
 from rugcheck.models import AggregatedData, AuditReport, RiskLevel
 
+# Import shared quota/IP utilities from the canonical module.
+# Re-exported here for backward compatibility with existing imports.
+from rugcheck.quota import (  # noqa: F401
+    DailyQuota,
+    TRUSTED_PROXY_NETWORKS,
+    resolve_client_ip as _resolve_client_ip,
+)
+
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Trusted proxy networks — only trust CF-Connecting-IP / X-Forwarded-For
-# when the direct socket peer is one of these.
-# Source: https://www.cloudflare.com/ips/
-# ---------------------------------------------------------------------------
-
-_CLOUDFLARE_IPV4 = [
-    "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22",
-    "103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
-    "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22",
-    "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
-    "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
-]
-_CLOUDFLARE_IPV6 = [
-    "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32",
-    "2405:b500::/32", "2405:8100::/32", "2a06:98c0::/29",
-    "2c0f:f248::/32",
-]
-
-TRUSTED_PROXY_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
-    ipaddress.ip_network(cidr) for cidr in _CLOUDFLARE_IPV4 + _CLOUDFLARE_IPV6
-]
-
-
-def _is_trusted_proxy(ip_str: str) -> bool:
-    """Return True if *ip_str* belongs to a known trusted proxy (Cloudflare or loopback)."""
-    try:
-        addr = ipaddress.ip_address(ip_str)
-    except ValueError:
-        return False
-    if addr.is_loopback:
-        return True
-    return any(addr in net for net in TRUSTED_PROXY_NETWORKS)
 
 # Solana address: base58, 32-44 chars
 SOLANA_ADDR_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
@@ -124,100 +96,8 @@ class RateLimiter:
             return True, 0
 
 
-class DailyQuota:
-    """Per-IP daily request quota. Resets at UTC midnight.
-
-    Caps the number of tracked IPs via ``max_tracked_ips`` to prevent memory
-    exhaustion from IP-rotation attacks.
-    """
-
-    def __init__(self, max_daily: int, max_tracked_ips: int = 50_000):
-        self._max_daily = max_daily
-        self._max_tracked_ips = max_tracked_ips
-        # ip -> (date_str, count)
-        self._counts: dict[str, tuple[str, int]] = {}
-        self._lock = asyncio.Lock()
-
-    async def evict_stale(self) -> int:
-        """Remove entries from previous days. Returns number of evicted entries."""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        async with self._lock:
-            stale_keys = [
-                ip for ip, (date_str, _) in self._counts.items()
-                if date_str != today
-            ]
-            for ip in stale_keys:
-                del self._counts[ip]
-            return len(stale_keys)
-
-    async def check(self, client_ip: str) -> tuple[bool, int]:
-        """Return (allowed, remaining). remaining is 0 when exhausted."""
-        if not client_ip or client_ip == "unknown":
-            # Treat unidentifiable clients as a single bucket.
-            client_ip = "__unknown__"
-
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-        async with self._lock:
-            # Evict entries from previous days if we're over the cap
-            if len(self._counts) >= self._max_tracked_ips:
-                stale_keys = [
-                    ip for ip, (date_str, _) in self._counts.items()
-                    if date_str != today
-                ]
-                for ip in stale_keys:
-                    del self._counts[ip]
-                # If still over cap after evicting stale, drop oldest entries
-                if len(self._counts) >= self._max_tracked_ips:
-                    excess = len(self._counts) - self._max_tracked_ips + 1
-                    for ip in list(self._counts.keys())[:excess]:
-                        del self._counts[ip]
-
-            entry = self._counts.get(client_ip)
-            if entry is None or entry[0] != today:
-                # New day or first request — reset
-                self._counts[client_ip] = (today, 1)
-                return True, self._max_daily - 1
-
-            date_str, count = entry
-            if count >= self._max_daily:
-                return False, 0
-
-            self._counts[client_ip] = (today, count + 1)
-            return True, self._max_daily - count - 1
-
-
 # Loopback IPs — requests from the ag402 gateway running on the same host.
 GATEWAY_IPS: frozenset[str] = frozenset({"127.0.0.1", "::1"})
-
-
-def _resolve_client_ip(request: Request) -> str:
-    """Extract the real client IP from proxy headers.
-
-    SECURITY: Only trust CF-Connecting-IP and X-Forwarded-For when the
-    direct socket peer is a known trusted proxy (Cloudflare IP range or
-    loopback).  If the socket peer is untrusted, these headers can be
-    freely forged by the caller to bypass rate limiting.
-
-    Priority (when socket peer is trusted):
-      1. CF-Connecting-IP  (set by Cloudflare, single IP)
-      2. X-Forwarded-For   (leftmost = original client)
-      3. request.client.host (direct connection)
-    """
-    socket_ip = request.client.host if request.client else "unknown"
-
-    if _is_trusted_proxy(socket_ip):
-        cf_ip = request.headers.get("cf-connecting-ip")
-        if cf_ip:
-            return cf_ip.strip()
-
-        xff = request.headers.get("x-forwarded-for")
-        if xff:
-            real_ip = xff.split(",")[0].strip()
-            if real_ip:
-                return real_ip
-
-    return socket_ip
 
 
 # ---------------------------------------------------------------------------
@@ -439,8 +319,8 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
                     )
             else:
                 # Free user — daily quota
-                allowed, remaining = await free_daily.check(client_ip)
-                if not allowed:
+                quota_result = await free_daily.check(client_ip)
+                if not quota_result.allowed:
                     return JSONResponse(
                         status_code=429,
                         content={
