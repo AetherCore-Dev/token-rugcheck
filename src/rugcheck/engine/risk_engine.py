@@ -15,6 +15,7 @@ Rule design principles (validated against real Solana ecosystem 2026-02):
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
@@ -29,6 +30,8 @@ from rugcheck.models import (
     RiskFlag,
     RiskLevel,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -49,6 +52,15 @@ class Rule:
 # Tokens with liquidity >= this threshold are exempt from LP-protection
 # and holder-concentration rules. High liquidity is itself anti-rug.
 LIQUIDITY_EXEMPTION_USD = 1_000_000
+
+# Well-known safe tokens that bypass risk evaluation.
+# These core Solana ecosystem tokens have contract properties (e.g., mintable
+# for the native SOL wrapper) that are not rug-pull indicators.
+KNOWN_SAFE_MINTS: frozenset[str] = frozenset({
+    "So11111111111111111111111111111111111111112",      # Wrapped SOL
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",  # USDC
+    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",   # USDT
+})
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +217,8 @@ def evaluate(data: AggregatedData) -> tuple[int, list[RiskFlag], list[RiskFlag]]
     for rule in RULES:
         try:
             triggered = rule.evaluate(data)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Rule %s skipped: %s", rule.name, exc)
             continue  # data unavailable → skip rule
 
         if triggered is True:
@@ -227,6 +240,10 @@ def build_report(
     cache_hit: bool = False,
 ) -> AuditReport:
     """Build a complete three-layer audit report."""
+    # Short-circuit for known-safe tokens
+    if mint_address in KNOWN_SAFE_MINTS:
+        return _build_known_safe_report(mint_address, data, response_time_ms, cache_hit)
+
     risk_score, red_flags, green_flags = evaluate(data)
 
     if risk_score >= 70:
@@ -298,3 +315,51 @@ def _invert_message(rule_name: str) -> str:
         "lp_unprotected": "Liquidity pool is sufficiently protected (LP Burned or Locked).",
     }
     return messages.get(rule_name, f"{rule_name}: OK")
+
+
+def _build_known_safe_report(
+    mint_address: str,
+    data: AggregatedData,
+    response_time_ms: int = 0,
+    cache_hit: bool = False,
+) -> AuditReport:
+    """Build a pre-defined safe report for well-known ecosystem tokens."""
+    if len(data.sources_failed) == 0 and len(data.sources_succeeded) >= 2:
+        completeness = "full"
+    elif len(data.sources_succeeded) >= 2:
+        completeness = "partial"
+    else:
+        completeness = "minimal"
+
+    return AuditReport(
+        contract_address=mint_address,
+        chain="solana",
+        action=ActionLayer(is_safe=True, risk_level=RiskLevel.SAFE, risk_score=0),
+        analysis=AnalysisLayer(
+            summary="This is a well-known, established Solana ecosystem token.",
+            red_flags=[],
+            green_flags=[RiskFlag(level="SAFE", message="Well-known ecosystem token (whitelisted).")],
+        ),
+        evidence=EvidenceLayer(
+            token_name=data.token_name,
+            token_symbol=data.token_symbol,
+            price_usd=data.price_usd,
+            liquidity_usd=data.liquidity_usd,
+            volume_24h_usd=data.volume_24h_usd,
+            top_10_holders_pct=data.top10_holder_pct,
+            is_mintable=data.is_mintable,
+            is_freezable=data.is_freezable,
+            is_closable=data.is_closable,
+            lp_burned_pct=data.lp_burned_pct,
+            lp_locked_pct=data.lp_locked_pct,
+            pair_created_at=data.pair_created_at.isoformat() if data.pair_created_at else None,
+            holder_count=data.holder_count,
+            rugcheck_score=data.rugcheck_score,
+        ),
+        metadata=AuditMetadata(
+            data_sources=data.sources_succeeded,
+            data_completeness=completeness,
+            cache_hit=cache_hit,
+            response_time_ms=response_time_ms,
+        ),
+    )

@@ -85,16 +85,18 @@ class Aggregator:
 
         now = time.monotonic()
         any_success = False
+        any_failure = False
         for r in results:
             if r.success:
                 logger.info("[AGG] %s: OK", r.source)
                 any_success = True
             else:
                 logger.warning("[AGG] %s: FAILED (%s)", r.source, r.error)
+                any_failure = True
 
         if any_success:
             self.last_success_time = now
-        else:
+        if any_failure:
             self.last_failure_time = now
 
         return _merge(results)

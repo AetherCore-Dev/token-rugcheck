@@ -283,12 +283,23 @@ async def test_zero_quota_wrapper_always_402():
 # ---------------------------------------------------------------------------
 
 
-async def test_catch_all_forwards_to_gateway(wrapper_app):
+async def test_catch_all_returns_404_for_unknown_paths(wrapper_app):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=wrapper_app), base_url="http://test"
     ) as client:
         resp = await client.get("/some/unknown/path")
-        assert resp.status_code == 402
+        assert resp.status_code == 404
+
+
+async def test_catch_all_returns_404_for_non_audit_paths(wrapper_app):
+    """Non-audit paths should return 404, not be forwarded to the payment gateway."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=wrapper_app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/v2/something")
+        assert resp.status_code == 404
+        resp2 = await client.get("/random")
+        assert resp2.status_code == 404
 
 
 async def test_catch_all_does_not_consume_quota(wrapper_app):

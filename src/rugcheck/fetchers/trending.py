@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 BOOSTED_TOP_URL = "https://api.dexscreener.com/token-boosts/top/v1"
+TOKENS_API_BASE = "https://api.dexscreener.com/tokens/v1/solana"
 ICON_CDN_BASE = "https://cdn.dexscreener.com/cms/images"
 
 
@@ -150,5 +151,39 @@ async def fetch_trending_solana(
 
         if len(tokens) >= max_tokens:
             break
+
+    # --- Enrich with name/symbol from DexScreener tokens API ---
+    mints_needing_info = [t.mint_address for t in tokens if not t.token_name]
+    if mints_needing_info:
+        try:
+            mints_param = ",".join(mints_needing_info)
+            enrich_resp = await client.get(
+                f"{TOKENS_API_BASE}/{mints_param}",
+                timeout=timeout,
+            )
+            enrich_resp.raise_for_status()
+            pairs = enrich_resp.json()
+            if isinstance(pairs, list):
+                # Build lookup: mint -> (name, symbol) from first matching pair
+                info_map: dict[str, tuple[str, str]] = {}
+                for pair in pairs:
+                    base = pair.get("baseToken") or {}
+                    mint = base.get("address", "")
+                    if mint and mint not in info_map:
+                        name = base.get("name")
+                        symbol = base.get("symbol")
+                        if name or symbol:
+                            info_map[mint] = (name or "", symbol or "")
+                # Apply to tokens
+                for token in tokens:
+                    if token.mint_address in info_map:
+                        name, symbol = info_map[token.mint_address]
+                        if not token.token_name:
+                            token.token_name = name or None
+                        if not token.token_symbol:
+                            token.token_symbol = symbol or None
+        except Exception as exc:
+            # Graceful degradation: enrichment failure is non-fatal
+            logger.warning("[TRENDING] Token enrichment failed: %s", exc)
 
     return tokens

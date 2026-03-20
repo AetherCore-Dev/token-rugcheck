@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import re
 import time
@@ -13,6 +14,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
@@ -98,8 +100,13 @@ class RateLimiter:
             return True, 0
 
 
-# Loopback IPs — requests from the ag402 gateway running on the same host.
-GATEWAY_IPS: frozenset[str] = frozenset({"127.0.0.1", "::1"})
+# Loopback detection — handles IPv4, IPv6, and IPv6-mapped IPv4 (::ffff:127.0.0.1).
+def _is_loopback_ip(ip_str: str) -> bool:
+    """Check if an IP address is loopback, handling IPv6-mapped IPv4."""
+    try:
+        return ipaddress.ip_address(ip_str).is_loopback
+    except ValueError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +282,15 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
         **docs_kwargs,
     )
 
+    # ---- CORS ----
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["https://rugcheck.aethercore.dev"],
+        allow_methods=["GET"],
+        allow_headers=["*"],
+        expose_headers=["X-Request-ID", "X-Free-Remaining", "X-Quota-Tier"],
+    )
+
     # ---- Middleware: Request-ID (outermost — runs first) ----
 
     @app.middleware("http")
@@ -295,7 +311,7 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
         path = request.url.path
         if path in _INTERNAL_PATHS:
             client_ip = request.client.host if request.client else "unknown"
-            if client_ip not in GATEWAY_IPS:
+            if not _is_loopback_ip(client_ip):
                 return JSONResponse(
                     status_code=403,
                     content={"detail": "Endpoint restricted to internal access."},
@@ -309,7 +325,7 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
         path = request.url.path
         # Use direct socket IP to determine if request came from gateway
         socket_ip = request.client.host if request.client else "unknown"
-        is_loopback = socket_ip in GATEWAY_IPS
+        is_loopback = _is_loopback_ip(socket_ip)
         # Use real client IP (from proxy headers) for rate limiting.
         # For loopback (paid via gateway): resolve real IP so per-user limits work.
         # For non-loopback (free): also resolve real IP from proxy headers.
@@ -369,27 +385,48 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
         REQUEST_DURATION.labels(method=method, path=path).observe(duration)
         return response
 
+    # ---- Middleware: Security headers (outermost — declared last, runs first) ----
+
+    @app.middleware("http")
+    async def security_headers_middleware(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if cfg.production:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; style-src 'unsafe-inline' 'self'; script-src 'unsafe-inline' 'self'"
+            )
+        return response
+
     # ---- Circuit breaker helpers ----
 
-    def _cb_is_open() -> bool:
+    cb_lock = asyncio.Lock()
+
+    async def _cb_is_open() -> bool:
         """Return True if the circuit breaker is currently open (tripped)."""
-        if cb["consecutive_failures"] < cb["threshold"]:
-            return False
-        # Breaker is tripped — check if cooldown has elapsed
-        elapsed = time.monotonic() - cb["last_open_time"]
-        if elapsed >= cb["cooldown"]:
-            # Allow one probe request (half-open)
+        async with cb_lock:
+            if cb["consecutive_failures"] < cb["threshold"]:
+                return False
+            # Breaker is tripped — check if cooldown has elapsed
+            elapsed = time.monotonic() - cb["last_open_time"]
+            if elapsed >= cb["cooldown"]:
+                # Allow one probe request (half-open)
+                cb["consecutive_failures"] = 0
+                return False
+            return True
+
+    async def _cb_record_failure() -> None:
+        async with cb_lock:
+            cb["consecutive_failures"] += 1
+            if cb["consecutive_failures"] >= cb["threshold"]:
+                cb["last_open_time"] = time.monotonic()
+
+    async def _cb_record_success() -> None:
+        async with cb_lock:
             cb["consecutive_failures"] = 0
-            return False
-        return True
-
-    def _cb_record_failure() -> None:
-        cb["consecutive_failures"] += 1
-        if cb["consecutive_failures"] >= cb["threshold"]:
-            cb["last_open_time"] = time.monotonic()
-
-    def _cb_record_success() -> None:
-        cb["consecutive_failures"] = 0
 
     # ---- Versioned API routes (/v1/) ----
 
@@ -411,7 +448,7 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
             return cached
 
         # Circuit breaker check — if open, return degraded immediately
-        if _cb_is_open():
+        if await _cb_is_open():
             logger.warning("[AUDIT] Circuit breaker OPEN — returning degraded for %s", mint_address[:16])
             data = AggregatedData(
                 sources_succeeded=[],
@@ -437,7 +474,7 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
                 sources_failed=["RugCheck", "DexScreener", "GoPlus"],
             )
             _record_upstream_metrics(data)
-            _cb_record_failure()
+            await _cb_record_failure()
             report = _build_degraded_report(mint_address, data, elapsed_ms)
             await cache.set(mint_address, report, ttl_override=_DEGRADED_CACHE_TTL)
             return report
@@ -446,12 +483,12 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
         _record_upstream_metrics(data)
 
         if not data.sources_succeeded:
-            _cb_record_failure()
+            await _cb_record_failure()
             report = _build_degraded_report(mint_address, data, elapsed_ms)
             await cache.set(mint_address, report, ttl_override=_DEGRADED_CACHE_TTL)
             return report
 
-        _cb_record_success()
+        await _cb_record_success()
         report = build_report(mint_address, data, response_time_ms=elapsed_ms)
         report.metadata.data_age_seconds = 0
         logger.info(

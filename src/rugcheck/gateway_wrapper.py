@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -80,6 +81,10 @@ _PROXY_TIMEOUT: float = 10.0
 
 # Timeout for in-process ASGI forwarding to the gateway app (seconds).
 _GATEWAY_TIMEOUT: float = 10.0
+
+# Valid audit path patterns — only these should be forwarded to the payment gateway.
+# Everything else that isn't a registered free-pass route returns 404.
+_VALID_GATEWAY_PATH = re.compile(r"^/(v1/)?audit/[1-9A-HJ-NP-Za-km-z]{32,44}$")
 
 
 # ---------------------------------------------------------------------------
@@ -297,13 +302,18 @@ class QuotaAwareGateway:
                     request, gateway_client_holder["client"], gateway_app,
                 )
 
-        # --- Catch-all: forward to gateway ---
+        # --- Catch-all: 404 for unknown paths, forward valid audit paths to gateway ---
 
         @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
         async def catch_all(request: Request, path: str):
-            """Non-audit paths → forward to gateway app."""
-            return await _forward_to_gateway(
-                request, gateway_client_holder["client"], gateway_app,
+            """Unknown paths return 404; valid audit paths go to payment gateway."""
+            if _VALID_GATEWAY_PATH.match(request.url.path):
+                return await _forward_to_gateway(
+                    request, gateway_client_holder["client"], gateway_app,
+                )
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "Not found"},
             )
 
         return app

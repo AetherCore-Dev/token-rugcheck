@@ -131,6 +131,13 @@ console.log(`Risk: ${report.action.risk_level} (${report.action.risk_score}/100)
 <script>
 const API = window.location.origin;
 
+function esc(s) {
+  if (s == null) return '';
+  const el = document.createElement('span');
+  el.textContent = String(s);
+  return el.innerHTML;
+}
+
 function tryExample(addr) {
   document.getElementById('mint').value = addr;
   doAudit();
@@ -164,6 +171,12 @@ function fmt(v, suffix) {
 async function doAudit() {
   const mint = document.getElementById('mint').value.trim();
   if (!mint) return;
+  // Base58 validation: Solana addresses are 32-44 chars, base58 charset
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) {
+    document.getElementById('status').className = 'status error';
+    document.getElementById('status').textContent = 'Invalid Solana address format. Must be 32-44 base58 characters.';
+    return;
+  }
   const btn = document.getElementById('btn');
   const status = document.getElementById('status');
   const result = document.getElementById('result');
@@ -175,7 +188,10 @@ async function doAudit() {
   result.style.display = 'none';
 
   try {
-    const resp = await fetch(API + '/v1/audit/' + mint);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const resp = await fetch(API + '/v1/audit/' + mint, { signal: controller.signal });
+    clearTimeout(timeoutId);
     if (!resp.ok) {
       const txt = await resp.text();
       throw new Error(resp.status + ': ' + txt.substring(0, 200));
@@ -185,7 +201,11 @@ async function doAudit() {
     renderReport(r);
   } catch (e) {
     status.className = 'status error';
-    status.textContent = 'Error: ' + e.message;
+    if (e.name === 'AbortError') {
+      status.textContent = 'Request timed out. The server may be overloaded — please try again.';
+    } else {
+      status.textContent = 'Error: ' + e.message;
+    }
   } finally {
     btn.disabled = false;
     btn.textContent = 'Audit';
@@ -199,10 +219,10 @@ function renderReport(r) {
 
   let flagsHtml = '';
   (an.red_flags||[]).forEach(f => {
-    flagsHtml += `<div class="flag red">${f.level}: ${f.message}</div>`;
+    flagsHtml += `<div class="flag red">${esc(f.level)}: ${esc(f.message)}</div>`;
   });
   (an.green_flags||[]).forEach(f => {
-    flagsHtml += `<div class="flag green">${f.level}: ${f.message}</div>`;
+    flagsHtml += `<div class="flag green">${esc(f.level)}: ${esc(f.message)}</div>`;
   });
 
   const evItems = [
@@ -223,17 +243,17 @@ function renderReport(r) {
   result.innerHTML = `
     <div class="gauge">
       <div class="gauge-circle" style="border-color:${color};color:${color}">${a.risk_score}</div>
-      <div class="gauge-label" style="color:${color}">${a.risk_level}</div>
+      <div class="gauge-label" style="color:${color}">${esc(a.risk_level)}</div>
       <div class="gauge-sublabel">${a.is_safe ? 'Appears Safe' : 'Caution Advised'}</div>
     </div>
     <div class="token-info">
-      <span>${ev.token_name||'—'} <strong>(${ev.token_symbol||'—'})</strong></span>
-      <span>${r.contract_address.slice(0,8)}…${r.contract_address.slice(-6)}</span>
+      <span>${esc(ev.token_name)||'—'} <strong>(${esc(ev.token_symbol)||'—'})</strong></span>
+      <span>${esc(r.contract_address.slice(0,8))}…${esc(r.contract_address.slice(-6))}</span>
       ${r.degraded ? '<span style="color:var(--yellow)">⚠ Degraded</span>' : ''}
     </div>
     <div class="card">
-      <h3>Analysis <span class="badge" style="background:${color}22;color:${color}">${a.risk_level}</span></h3>
-      <p style="color:var(--muted);font-size:14px;line-height:1.6;margin-bottom:14px">${an.summary}</p>
+      <h3>Analysis <span class="badge" style="background:${color}22;color:${color}">${esc(a.risk_level)}</span></h3>
+      <p style="color:var(--muted);font-size:14px;line-height:1.6;margin-bottom:14px">${esc(an.summary)}</p>
       <div class="flags">${flagsHtml}</div>
     </div>
     <div class="card">
@@ -245,8 +265,8 @@ function renderReport(r) {
     <div class="card">
       <h3>Metadata</h3>
       <div class="meta">
-        <span>Sources: ${(m.data_sources||[]).join(', ')||'—'}</span>
-        <span>Completeness: ${m.data_completeness}</span>
+        <span>Sources: ${esc((m.data_sources||[]).join(', '))||'—'}</span>
+        <span>Completeness: ${esc(m.data_completeness)}</span>
         <span>Response: ${m.response_time_ms}ms</span>
         ${m.cache_hit ? '<span>Cached</span>' : ''}
       </div>

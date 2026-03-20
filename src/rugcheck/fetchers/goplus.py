@@ -73,7 +73,7 @@ def _parse_goplus(raw: dict) -> dict:
     # Top 10 holders percentage
     holders = raw.get("holders") or []
     if holders:
-        total_pct = sum(float(h.get("percent", 0)) for h in holders[:10])
+        total_pct = sum(_safe_float(h.get("percent")) or 0.0 for h in holders[:10])
         data["top10_holder_pct"] = round(total_pct * 100, 2)  # GoPlus returns as decimal
 
     # DEX / liquidity — take the pool with highest TVL for liquidity,
