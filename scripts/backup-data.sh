@@ -21,7 +21,7 @@ set -euo pipefail
 # --- Configuration ---
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
 KEEP_COUNT="${KEEP_COUNT:-30}"
-VOLUME_NAME="token_rugcheck_mcp_ag402-data"
+VOLUME_NAME="token-rugcheck_ag402-data"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 REMOTE_METHOD=""
 
@@ -45,7 +45,7 @@ if ! docker volume inspect "$VOLUME_NAME" &>/dev/null; then
     echo "[WARN] Docker volume '$VOLUME_NAME' not found."
     echo "[WARN] Trying alternative name patterns..."
     # Try common variations
-    for alt in "ag402-data" "token-rugcheck-mcp_ag402-data"; do
+    for alt in "ag402-data" "token-rugcheck-mcp_ag402-data" "token_rugcheck_mcp_ag402-data" "token-rugcheck_ag402-data"; do
         if docker volume inspect "$alt" &>/dev/null; then
             VOLUME_NAME="$alt"
             echo "[INFO] Found volume: $VOLUME_NAME"
