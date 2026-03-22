@@ -109,6 +109,46 @@ a{color:var(--accent);text-decoration:none}
 /* Result fade-in */
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 .result.show{display:block;animation:fadeIn .35s ease-out}
+
+/* ---- Search history dropdown ---- */
+.search-wrap{position:relative;max-width:640px;margin:32px auto;padding:0 20px}
+.history-dropdown{display:none;position:absolute;top:100%;left:20px;right:20px;background:var(--card);border:1px solid var(--border);border-radius:0 0 var(--radius) var(--radius);max-height:340px;overflow-y:auto;z-index:100;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.history-dropdown.show{display:block}
+.history-item{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border);transition:background .15s}
+.history-item:last-of-type{border-bottom:none}
+.history-item:hover{background:var(--bg)}
+.history-addr{color:var(--muted);font-family:'SF Mono',Consolas,monospace;font-size:12px;min-width:100px}
+.history-name{flex:1;color:var(--text);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.history-risk{font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px;white-space:nowrap}
+.history-del{color:var(--muted);cursor:pointer;padding:2px 6px;border-radius:4px;font-size:16px;line-height:1;opacity:.5;transition:opacity .15s}
+.history-del:hover{opacity:1;color:var(--red)}
+.history-footer{display:flex;justify-content:space-between;align-items:center;padding:8px 14px;border-top:1px solid var(--border);font-size:12px;color:var(--muted)}
+.history-clear{color:var(--red);cursor:pointer;font-size:12px;opacity:.7}
+.history-clear:hover{opacity:1}
+.history-empty{padding:16px;text-align:center;color:var(--muted);font-size:13px}
+
+/* ---- Theme toggle button ---- */
+.header{position:relative}
+.theme-toggle{position:absolute;top:20px;right:20px;width:36px;height:36px;border-radius:50%;border:1px solid var(--border);background:var(--card);color:var(--text);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:border-color .2s,background .2s}
+.theme-toggle:hover{border-color:var(--accent)}
+.theme-toggle svg{width:18px;height:18px}
+
+/* ---- Light theme ---- */
+[data-theme="light"]{--bg:#f8fafc;--card:#ffffff;--border:#e2e8f0;--text:#1e293b;--muted:#64748b;--accent:#2563eb}
+[data-theme="light"] .code-block{background:#f1f5f9;color:#334155;border-color:var(--border)}
+[data-theme="light"] .code-tab.active{background:#f1f5f9;color:var(--text)}
+[data-theme="light"] .ev-item{background:#f1f5f9}
+[data-theme="light"] .skel-circle,[data-theme="light"] .skel-line{background:linear-gradient(90deg,#e2e8f0 25%,#f1f5f9 50%,#e2e8f0 75%);background-size:400px 100%;animation:shimmer 1.5s infinite}
+[data-theme="light"] .history-dropdown{box-shadow:0 8px 24px rgba(0,0,0,.08)}
+[data-theme="light"] .history-item:hover{background:#f1f5f9}
+[data-theme="light"] .flag.red{background:rgba(239,68,68,.08);color:#dc2626}
+[data-theme="light"] .flag.green{background:rgba(16,185,129,.08);color:#059669}
+[data-theme="light"] .meta span{background:#f1f5f9}
+[data-theme="light"] .trending-card{box-shadow:0 1px 3px rgba(0,0,0,.08)}
+[data-theme="light"] .card{box-shadow:0 1px 3px rgba(0,0,0,.06)}
+[data-theme="light"] .search-box input{background:#f1f5f9}
+@media(max-width:480px){.header{padding-top:20px}.header h1{font-size:22px}.theme-toggle{top:12px;right:12px;width:32px;height:32px}.theme-toggle svg{width:16px;height:16px}}
+body{transition:background .3s,color .3s}
 </style>
 </head>
 <body>
@@ -116,11 +156,17 @@ a{color:var(--accent);text-decoration:none}
 <div class="header">
   <h1>Token <span>RugCheck</span> Playground</h1>
   <p>Paste a Solana token mint address to get an instant security audit</p>
+  <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme" id="themeBtn">
+    <svg id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></svg>
+  </button>
 </div>
 
-<div class="search-box">
-  <input id="mint" type="text" placeholder="Enter Solana mint address…" spellcheck="false">
-  <button id="btn" onclick="doAudit()">Audit</button>
+<div class="search-wrap">
+  <div class="search-box" style="max-width:none;margin:0;padding:0">
+    <input id="mint" type="text" placeholder="Enter Solana mint address…" spellcheck="false" autocomplete="off">
+    <button id="btn" onclick="doAudit()">Audit</button>
+  </div>
+  <div id="history" class="history-dropdown"></div>
 </div>
 <div class="examples">
   Try: <a onclick="tryExample('JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN')">JUP</a>
@@ -162,6 +208,33 @@ console.log(`Risk: ${report.action.risk_level} (${report.action.risk_score}/100)
 
 <script>
 const API = window.location.origin;
+const HISTORY_KEY = 'rugcheck_history';
+const THEME_KEY = 'rugcheck_theme';
+const MAX_HISTORY = 10;
+
+/* ---- Theme ---- */
+const sunPath = 'M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z';
+const moonPath = 'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z';
+
+function initTheme() {
+  const saved = localStorage.getItem(THEME_KEY);
+  const prefer = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  const theme = saved || prefer;
+  document.documentElement.dataset.theme = theme;
+  updateThemeIcon(theme);
+}
+function toggleTheme() {
+  const cur = document.documentElement.dataset.theme;
+  const next = cur === 'light' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem(THEME_KEY, next);
+  updateThemeIcon(next);
+}
+function updateThemeIcon(theme) {
+  const svg = document.getElementById('themeIcon');
+  svg.innerHTML = '<path d="' + (theme === 'dark' ? sunPath : moonPath) + '"/>';
+}
+initTheme();
 
 function esc(s) {
   if (s == null) return '';
@@ -171,6 +244,7 @@ function esc(s) {
 }
 
 function tryExample(addr) {
+  hideHistory();
   document.getElementById('mint').value = addr;
   doAudit();
 }
@@ -247,6 +321,7 @@ function fmt(v, suffix) {
 }
 
 async function doAudit() {
+  hideHistory();
   const mint = document.getElementById('mint').value.trim();
   if (!mint) return;
   // Base58 validation: Solana addresses are 32-44 chars, base58 charset
@@ -277,6 +352,9 @@ async function doAudit() {
     const r = await resp.json();
     status.innerHTML = '';
     renderReport(r);
+    // Save to search history
+    const ev = r.evidence || {};
+    saveToHistory(mint, ev.token_name || '', ev.token_symbol || '', (r.action||{}).risk_level || '');
   } catch (e) {
     status.className = 'status error';
     if (e.name === 'AbortError') {
@@ -356,7 +434,76 @@ function renderReport(r) {
 }
 
 document.getElementById('mint').addEventListener('keydown', e => {
-  if (e.key === 'Enter') doAudit();
+  if (e.key === 'Enter') { hideHistory(); doAudit(); }
+  if (e.key === 'Escape') hideHistory();
+});
+
+/* ---- Search history ---- */
+function getHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; }
+  catch { return []; }
+}
+function saveToHistory(address, name, symbol, risk_level) {
+  try {
+    let h = getHistory().filter(x => x.address !== address);
+    h.unshift({ address, name, symbol, risk_level, ts: Date.now() });
+    if (h.length > MAX_HISTORY) h = h.slice(0, MAX_HISTORY);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(h));
+  } catch(e) { /* localStorage full or unavailable */ }
+}
+function removeHistoryItem(address) {
+  try {
+    let h = getHistory().filter(x => x.address !== address);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(h));
+  } catch(e) { /* ignore */ }
+  renderHistory();
+}
+function clearHistory() {
+  localStorage.removeItem(HISTORY_KEY);
+  hideHistory();
+}
+function riskBg(level) {
+  const m = {SAFE:'rgba(16,185,129,.15)',LOW:'rgba(16,185,129,.15)',MEDIUM:'rgba(245,158,11,.15)',HIGH:'rgba(249,115,22,.15)',CRITICAL:'rgba(239,68,68,.15)'};
+  return m[level] || 'rgba(100,116,139,.1)';
+}
+function renderHistory(filter) {
+  const box = document.getElementById('history');
+  let h = getHistory();
+  if (!h.length) { box.innerHTML = '<div class="history-empty">No recent searches</div>'; box.classList.add('show'); return; }
+  if (filter) {
+    const f = filter.toLowerCase();
+    h = h.filter(x => x.address.toLowerCase().includes(f) || (x.name||'').toLowerCase().includes(f) || (x.symbol||'').toLowerCase().includes(f));
+  }
+  if (!h.length) { box.innerHTML = '<div class="history-empty">No matches</div>'; box.classList.add('show'); return; }
+  let html = '';
+  h.forEach(x => {
+    const addr = x.address.slice(0,6) + '\u2026' + x.address.slice(-4);
+    const label = x.name ? esc(x.name) + (x.symbol ? ' <span style="color:var(--muted)">(' + esc(x.symbol) + ')</span>' : '') : '';
+    const rc = riskColor(x.risk_level);
+    const rb = riskBg(x.risk_level);
+    html += '<div class="history-item" data-addr="' + esc(x.address) + '">' +
+      '<span class="history-addr">' + addr + '</span>' +
+      '<span class="history-name">' + (label || '<span style="color:var(--muted)">Unknown</span>') + '</span>' +
+      (x.risk_level ? '<span class="history-risk" style="color:' + rc + ';background:' + rb + '">' + esc(x.risk_level) + '</span>' : '') +
+      '<span class="history-del" data-del="' + esc(x.address) + '">&times;</span>' +
+      '</div>';
+  });
+  html += '<div class="history-footer"><span>' + h.length + ' recent</span><span class="history-clear" onclick="clearHistory()">Clear all</span></div>';
+  box.innerHTML = html;
+  box.querySelectorAll('.history-item').forEach(item => {
+    item.addEventListener('click', () => { tryExample(item.dataset.addr); });
+  });
+  box.querySelectorAll('.history-del').forEach(btn => {
+    btn.addEventListener('click', e => { e.stopPropagation(); removeHistoryItem(btn.dataset.del); });
+  });
+  box.classList.add('show');
+}
+function hideHistory() { document.getElementById('history').classList.remove('show'); }
+
+document.getElementById('mint').addEventListener('focus', () => { renderHistory(document.getElementById('mint').value.trim()); });
+document.getElementById('mint').addEventListener('input', e => { renderHistory(e.target.value.trim()); });
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-wrap')) hideHistory();
 });
 </script>
 </body>
