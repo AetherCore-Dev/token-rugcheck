@@ -202,6 +202,29 @@ class QuotaAwareGateway:
                     content={"status": "unavailable", "detail": "Audit server unreachable"},
                 )
 
+        @app.get("/")
+        async def root(request: Request):
+            """Root endpoint — redirect to playground."""
+            client = proxy_client_holder["client"]
+            if client is None:
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "Proxy not initialized"},
+                )
+            try:
+                resp = await client.get("/")
+                return Response(
+                    content=resp.content,
+                    status_code=resp.status_code,
+                    headers={"content-type": resp.headers.get("content-type", "text/html")},
+                )
+            except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+                logger.warning("[GATEWAY-WRAPPER] Root endpoint proxy failed: %s", exc)
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "Audit server unreachable"},
+                )
+
         @app.get("/playground")
         async def playground(request: Request):
             """Playground — always proxied to audit backend, no quota consumed."""
