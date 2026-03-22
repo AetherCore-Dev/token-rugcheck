@@ -79,6 +79,36 @@ a{color:var(--accent);text-decoration:none}
 .examples{text-align:center;margin-top:12px;font-size:13px;color:var(--muted)}
 .examples a{cursor:pointer;margin:0 6px;color:var(--accent);font-size:12px;opacity:.8}
 .examples a:hover{opacity:1}
+
+/* Trending tokens */
+.trending{max-width:800px;margin:20px auto 0;padding:0 20px}
+.trending-hdr{font-size:13px;color:var(--muted);margin-bottom:10px;display:flex;align-items:center;gap:6px}
+.trending-row{display:flex;gap:10px;overflow-x:auto;padding-bottom:8px;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+.trending-row::-webkit-scrollbar{height:6px}
+.trending-row::-webkit-scrollbar-track{background:transparent}
+.trending-row::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+.trending-card{flex:0 0 auto;width:140px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 12px;text-align:center;cursor:pointer;transition:border-color .2s,transform .15s}
+.trending-card:hover{border-color:var(--accent);transform:translateY(-2px)}
+.trending-icon{width:48px;height:48px;border-radius:50%;object-fit:cover;margin:0 auto 8px;display:block;background:var(--bg)}
+.trending-name{font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trending-symbol{font-size:11px;color:var(--muted);margin-top:2px}
+.trending-boost{display:inline-block;font-size:10px;font-weight:600;color:var(--orange);background:rgba(249,115,22,.12);padding:2px 7px;border-radius:4px;margin-top:6px}
+
+/* Trending skeleton */
+@keyframes shimmer{0%{background-position:-200px 0}100%{background-position:200px 0}}
+.skel-card{flex:0 0 auto;width:140px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 12px;text-align:center}
+.skel-circle{width:48px;height:48px;border-radius:50%;margin:0 auto 8px;background:linear-gradient(90deg,var(--bg) 25%,#1a2332 50%,var(--bg) 75%);background-size:400px 100%;animation:shimmer 1.5s infinite}
+.skel-line{height:10px;border-radius:4px;margin:6px auto 0;background:linear-gradient(90deg,var(--bg) 25%,#1a2332 50%,var(--bg) 75%);background-size:400px 100%;animation:shimmer 1.5s infinite}
+.skel-line.w60{width:60%}
+.skel-line.w40{width:40%}
+
+/* Audit spinner */
+@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
+.spinner{display:inline-block;width:18px;height:18px;border:2.5px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle;margin-right:8px}
+
+/* Result fade-in */
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.result.show{display:block;animation:fadeIn .35s ease-out}
 </style>
 </head>
 <body>
@@ -97,6 +127,8 @@ a{color:var(--accent);text-decoration:none}
   <a onclick="tryExample('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v')">USDC</a>
   <a onclick="tryExample('So11111111111111111111111111111111111111112')">SOL</a>
 </div>
+
+<div id="trending" class="trending" style="display:none"></div>
 
 <div id="status" class="status"></div>
 <div id="result" class="result"></div>
@@ -155,6 +187,52 @@ function riskColor(level) {
   return m[level] || 'var(--muted)';
 }
 
+/* ---------- Trending tokens ---------- */
+function renderTrendingSkeleton() {
+  const box = document.getElementById('trending');
+  let sk = '<div class="trending-hdr">Trending</div><div class="trending-row">';
+  for (let i = 0; i < 8; i++) {
+    sk += '<div class="skel-card"><div class="skel-circle"></div>'
+        + '<div class="skel-line w60"></div><div class="skel-line w40"></div></div>';
+  }
+  sk += '</div>';
+  box.innerHTML = sk;
+  box.style.display = 'block';
+}
+
+function renderTrendingTokens(tokens) {
+  const box = document.getElementById('trending');
+  if (!tokens || tokens.length === 0) { box.style.display = 'none'; return; }
+  let html = '<div class="trending-hdr">\u{1F525} Trending</div><div class="trending-row">';
+  tokens.forEach(t => {
+    const iconHtml = t.icon_url
+      ? '<img class="trending-icon" src="' + esc(t.icon_url) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'">'
+      : '<div class="trending-icon"></div>';
+    html += '<div class="trending-card" data-mint="' + esc(t.mint_address) + '">'
+      + iconHtml
+      + '<div class="trending-name">' + (esc(t.token_name) || '\u2014') + '</div>'
+      + '<div class="trending-symbol">' + (esc(t.token_symbol) || '') + '</div>'
+      + (t.boost_amount ? '<div class="trending-boost">\u26A1 ' + esc(t.boost_amount) + '</div>' : '')
+      + '</div>';
+  });
+  html += '</div>';
+  box.innerHTML = html;
+  box.querySelectorAll('.trending-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const addr = card.getAttribute('data-mint');
+      if (addr) tryExample(addr);
+    });
+  });
+}
+
+(function loadTrending() {
+  renderTrendingSkeleton();
+  fetch(API + '/v1/trending')
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .then(data => renderTrendingTokens(data.tokens))
+    .catch(() => { document.getElementById('trending').style.display = 'none'; });
+})();
+
 function fmt(v, suffix) {
   if (v == null) return '—';
   if (typeof v === 'boolean') return v ? 'Yes' : 'No';
@@ -184,8 +262,8 @@ async function doAudit() {
   btn.disabled = true;
   btn.textContent = 'Auditing…';
   status.className = 'status';
-  status.textContent = 'Fetching data from 3 sources…';
-  result.style.display = 'none';
+  status.innerHTML = '<span class="spinner"></span>Fetching data from 3 sources\u2026';
+  result.className = 'result';
 
   try {
     const controller = new AbortController();
@@ -197,7 +275,7 @@ async function doAudit() {
       throw new Error(resp.status + ': ' + txt.substring(0, 200));
     }
     const r = await resp.json();
-    status.textContent = '';
+    status.innerHTML = '';
     renderReport(r);
   } catch (e) {
     status.className = 'status error';
@@ -272,7 +350,9 @@ function renderReport(r) {
       </div>
     </div>
   `;
-  result.style.display = 'block';
+  result.className = 'result';
+  void result.offsetWidth;
+  result.className = 'result show';
 }
 
 document.getElementById('mint').addEventListener('keydown', e => {
